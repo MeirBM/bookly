@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Bookly pre-commit gate. A file advises; a hook enforces.
+# Install once:  git config core.hooksPath .githooks
+set -uo pipefail
+
+fail=0
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$staged" ] && exit 0
+
+# --- 1. Secrets -------------------------------------------------------------
+# History is permanent and sits in every clone. A committed key is a compromised key.
+patterns=(
+  'BEGIN [A-Z ]*PRIVATE KEY'
+  'sk-[A-Za-z0-9]{20,}'
+  'AKIA[0-9A-Z]{16}'
+  'ghp_[A-Za-z0-9]{36}'
+  'eyJhbGciOi[A-Za-z0-9_-]{20,}'
+  '(password|passwd|secret|api[_-]?key|token)[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"']{8,}'
+  'postgres(ql)?://[^[:space:]"]*:[^[:space:]"@]+@'
+)
+for file in $staged; do
+  case "$file" in
+    *.example|*.md|.githooks/pre-commit) continue ;;
+  esac
+  [ -f "$file" ] || continue
+  for p in "${patterns[@]}"; do
+    if git show ":$file" | grep -nEi "$p" >/dev/null 2>&1; then
+      echo "BLOCKED  possible secret in $file  (pattern: $p)"
+      git show ":$file" | grep -nEi "$p" | head -3 | sed 's/^/         /'
+      fail=1
+    fi
+  done
+done
+
+# --- 2. Committed migrations are immutable ----------------------------------
+# Never edit a migration that has been committed — add the next one.
+for file in $(git diff --cached --name-only --diff-filter=M | grep 'db/migration/.*\.sql$' || true); do
+  echo "BLOCKED  $file is an already-committed migration; add a new V{n}__ file instead"
+  fail=1
+done
+
+# --- 3. Fast unit tests -----------------------------------------------------
+# Testcontainers suites run in CI, not here — the hook must stay fast enough to survive.
+if echo "$staged" | grep -q '^backend/.*\.java$'; then
+  if [ -x backend/mvnw ]; then
+    echo "running backend unit tests..."
+    if ! (cd backend && ./mvnw -q -o test -DskipITs 2>&1 | tail -25); then
+      echo "BLOCKED  backend unit tests failed"
+      fail=1
+    fi
+  fi
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo
+  echo "Commit refused. Fix the above; do not bypass with --no-verify."
+  exit 1
+fi
+exit 0
