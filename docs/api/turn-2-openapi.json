@@ -217,8 +217,38 @@
                     "required": true
                 },
                 "responses": {
-                    "200": {
-                        "description": "OK",
+                    "201": {
+                        "description": "Created",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ServiceResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Validation failed",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ServiceResponse"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Not a member of this business",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ServiceResponse"
+                                }
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "A service of that name exists",
                         "content": {
                             "*/*": {
                                 "schema": {
@@ -302,8 +332,28 @@
                     "required": true
                 },
                 "responses": {
-                    "200": {
-                        "description": "OK",
+                    "201": {
+                        "description": "Created",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/EmployeeResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Validation failed",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/EmployeeResponse"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Not a member of this business",
                         "content": {
                             "*/*": {
                                 "schema": {
@@ -405,8 +455,38 @@
                     "required": true
                 },
                 "responses": {
-                    "200": {
-                        "description": "OK",
+                    "201": {
+                        "description": "Created",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/WorkingHoursResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "The window does not end after it starts",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/WorkingHoursResponse"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Not a member of this business",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/WorkingHoursResponse"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "No such employee here",
                         "content": {
                             "*/*": {
                                 "schema": {
@@ -490,8 +570,28 @@
                     "required": true
                 },
                 "responses": {
-                    "200": {
-                        "description": "OK",
+                    "201": {
+                        "description": "Created",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/BlockedTimeResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "The period does not end after it starts",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/BlockedTimeResponse"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Not a member of this business",
                         "content": {
                             "*/*": {
                                 "schema": {
@@ -804,8 +904,14 @@
                     }
                 ],
                 "responses": {
-                    "200": {
-                        "description": "OK"
+                    "204": {
+                        "description": "Removed"
+                    },
+                    "403": {
+                        "description": "Not a member of this business"
+                    },
+                    "404": {
+                        "description": "No such window here"
                     }
                 },
                 "security": [
@@ -843,8 +949,14 @@
                     }
                 ],
                 "responses": {
-                    "200": {
-                        "description": "OK"
+                    "204": {
+                        "description": "Removed"
+                    },
+                    "403": {
+                        "description": "Not a member of this business"
+                    },
+                    "404": {
+                        "description": "No such service here"
                     }
                 },
                 "security": [
@@ -882,8 +994,14 @@
                     }
                 ],
                 "responses": {
-                    "200": {
-                        "description": "OK"
+                    "204": {
+                        "description": "Removed"
+                    },
+                    "403": {
+                        "description": "Not a member of this business"
+                    },
+                    "404": {
+                        "description": "No such employee here"
                     }
                 },
                 "security": [
@@ -921,8 +1039,14 @@
                     }
                 ],
                 "responses": {
-                    "200": {
-                        "description": "OK"
+                    "204": {
+                        "description": "Removed"
+                    },
+                    "403": {
+                        "description": "Not a member of this business"
+                    },
+                    "404": {
+                        "description": "No such blocked period here"
                     }
                 },
                 "security": [
@@ -1244,6 +1368,10 @@
                     },
                     "timezone": {
                         "type": "string"
+                    },
+                    "stepMinutes": {
+                        "type": "integer",
+                        "format": "int64"
                     },
                     "slots": {
                         "type": "array",

@@ -18,8 +18,13 @@ public final class AvailabilityDtos {
     public record AvailableSlot(Instant start, Instant end, List<UUID> employeeIds) {
     }
 
+    /**
+     * @param stepMinutes how far apart candidate start times are. Returned because a client
+     *                    otherwise cannot know what grid it is being given, and the value is
+     *                    configuration rather than a constant.
+     */
     public record AvailabilityResponse(UUID serviceId, String date, String timezone,
-                                       List<AvailableSlot> slots) {
+                                       long stepMinutes, List<AvailableSlot> slots) {
     }
 
     public record CreateBlockedTime(

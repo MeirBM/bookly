@@ -72,6 +72,7 @@ export type Availability = {
   serviceId: string;
   date: string;
   timezone: string;
+  stepMinutes: number;
   slots: AvailableSlot[];
 };
 

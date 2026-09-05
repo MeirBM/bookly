@@ -4,6 +4,8 @@ import com.bookly.availability.dto.AvailabilityDtos.AvailabilityResponse;
 import com.bookly.availability.dto.AvailabilityDtos.BlockedTimeResponse;
 import com.bookly.availability.dto.AvailabilityDtos.CreateBlockedTime;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -53,6 +55,10 @@ public class AvailabilityController {
 
     @PostMapping("/blocked-times")
     @Operation(summary = "Block a period; omit employeeId to block the whole business")
+    @ApiResponses({
+            @ApiResponse(responseCode = "201", description = "Created"),
+            @ApiResponse(responseCode = "400", description = "The period does not end after it starts"),
+            @ApiResponse(responseCode = "403", description = "Not a member of this business")})
     public ResponseEntity<BlockedTimeResponse> block(@PathVariable UUID businessId,
                                                      @Valid @RequestBody CreateBlockedTime request) {
         return ResponseEntity.status(201).body(blockedTimes.create(businessId, request));
@@ -66,6 +72,10 @@ public class AvailabilityController {
 
     @DeleteMapping("/blocked-times/{blockedTimeId}")
     @Operation(summary = "Remove a blocked period")
+    @ApiResponses({
+            @ApiResponse(responseCode = "204", description = "Removed"),
+            @ApiResponse(responseCode = "403", description = "Not a member of this business"),
+            @ApiResponse(responseCode = "404", description = "No such blocked period here")})
     public ResponseEntity<Void> unblock(@PathVariable UUID businessId,
                                         @PathVariable UUID blockedTimeId) {
         blockedTimes.delete(businessId, blockedTimeId);

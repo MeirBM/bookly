@@ -3,6 +3,8 @@ package com.bookly.service;
 import com.bookly.service.dto.ServiceRequests.CreateService;
 import com.bookly.service.dto.ServiceRequests.ServiceResponse;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -32,6 +34,11 @@ public class ServiceController {
 
     @PostMapping
     @Operation(summary = "Add a service this business offers")
+    @ApiResponses({
+            @ApiResponse(responseCode = "201", description = "Created"),
+            @ApiResponse(responseCode = "400", description = "Validation failed"),
+            @ApiResponse(responseCode = "403", description = "Not a member of this business"),
+            @ApiResponse(responseCode = "409", description = "A service of that name exists")})
     public ResponseEntity<ServiceResponse> create(@PathVariable UUID businessId,
                                                   @Valid @RequestBody CreateService request) {
         ServiceResponse created = catalog.create(businessId, request);
@@ -48,6 +55,10 @@ public class ServiceController {
 
     @DeleteMapping("/{serviceId}")
     @Operation(summary = "Remove a service and its employee links")
+    @ApiResponses({
+            @ApiResponse(responseCode = "204", description = "Removed"),
+            @ApiResponse(responseCode = "403", description = "Not a member of this business"),
+            @ApiResponse(responseCode = "404", description = "No such service here")})
     public ResponseEntity<Void> delete(@PathVariable UUID businessId,
                                        @PathVariable UUID serviceId) {
         catalog.delete(businessId, serviceId);

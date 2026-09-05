@@ -42,7 +42,7 @@ Each resolves to one true/false answer and names the test that decides it.
 | 2.4 | An employee with two working windows on one day (a break between them) yields slots in both and none in the gap | `AvailabilityCalculatorTest.respectsABreakBetweenTwoWindows` |
 | 2.5 | Candidate start times are generated on the configured step from the start of each working window, in business-local wall-clock time | `AvailabilityCalculatorTest.generatesStartsOnTheConfiguredStep` |
 | 2.6 | An employee not linked to the requested service contributes no slots | `AvailabilityIT.unlinkedEmployeeContributesNothing` |
-| 2.7 | With no employee requested, the result is the union of every eligible employee's availability, deduplicated by start instant, and each slot names which employees can serve it | `AvailabilityCalculatorTest.anyEmployeeUnionsAndDeduplicates` |
+| 2.7 | With no employee requested, the result is the union of every eligible employee's availability, deduplicated by start instant, and each slot names which employees can serve it | Two deciders, because one cannot see both halves: `AvailabilityCalculatorTest.anyEmployeeUnionsAndDeduplicates` for dedup and ordering, and `AvailabilityIT.slotsNameEveryEligibleEmployee` for attribution, which is only visible over HTTP |
 | 2.8 | A day on which the employee has no working window returns an empty list, not an error | `AvailabilityCalculatorTest.aNonWorkingDayReturnsNoSlots` |
 | 2.9 | Availability is computed from the inputs on every request: no table stores generated slots | `SchemaConventionsIT.noPreGeneratedSlotTable` |
 
@@ -59,7 +59,7 @@ Each resolves to one true/false answer and names the test that decides it.
 
 | # | Criterion | Decided by |
 |---|---|---|
-| 2.14 | Services, employees, employee↔service links, working hours and blocked times can each be created, listed and deleted through the API | `BusinessConfigurationIT` |
+| 2.14 | Services, employees, working hours and blocked times can each be created, listed and deleted through the API. Employee↔service links are **replaced as a set** rather than created and deleted individually, so the decider is that dropping a service from the set actually drops it | `BusinessConfigurationIT` |
 | 2.15 | A service duration must be positive and a whole number of minutes; a zero or negative duration is refused with 400 | `BusinessConfigurationIT.refusesNonPositiveDuration` |
 | 2.16 | A working window whose end is not after its start is refused with 400 | `BusinessConfigurationIT.refusesInvertedWorkingWindow` |
 | 2.17 | Every new route added in this turn is tenant-scoped and refuses a caller who is not a member | `TenantIsolationIT` — generated from the route table, so this criterion cannot be met by forgetting a route |
@@ -68,6 +68,8 @@ Each resolves to one true/false answer and names the test that decides it.
 | 2.23 | A caller refused access to a business receives 403 with the standard error body — never 401, which would tell them to authenticate when they already have and it cannot help | `TenantIsolationIT`, `AccessDeniedContractIT` |
 | 2.24 | Authorization is decided before argument validation: an outsider addressing a tenant-scoped route with missing or malformed query parameters still receives 403, not 400 | `AccessDeniedContractIT.authorizationPrecedesValidation` |
 | 2.25 | Schema naming holds both ways: every `*_at` column is `timestamptz` and every `*_local` column is `time without time zone` | `SchemaConventionsIT` |
+| 2.26 | The status code the OpenAPI document declares for an operation is the status that operation actually returns: creates declare 201, deletes declare 204 | `OpenApiIT.documentedStatusCodesMatchReality` |
+| 2.27 | The availability response states the step it was computed on, so a client knows what grid it received | `AvailabilityIT.responseStatesTheStep` |
 
 ### Interface
 
@@ -113,6 +115,8 @@ looks exactly like one that works. It remains one bean, one call shape, one plac
 
 **Column naming is a checkable convention, not a habit:** `*_at` is an instant stored `timestamptz`;
 `*_local` is a wall-clock time in the business's own zone stored `time`. Both halves are asserted.
+
+**A working window whose local start falls in the skipped hour is clipped to the first real instant, and the grid is stepped from there** — rather than anchored to the configured local start with non-existent times skipped. The two readings agree whenever the step divides the gap and diverge otherwise; this one is chosen because it never offers a time that did not happen, which is the direction part 1 says to resolve toward.
 A rule enforced in only one direction would let a genuine instant stored as `time` pass unnoticed,
 which is how a booking ends up an hour out twice a year.
 
@@ -181,7 +185,7 @@ The warnings that would be given to a colleague starting this turn.
 
 ## Definition of done for this turn
 
-All twenty-five criteria in part 2 are true, `docs/audit/turn-2.md` records the five Merge-Readiness
+All twenty-seven criteria in part 2 are true, `docs/audit/turn-2.md` records the five Merge-Readiness
 criteria with evidence, and the branch merges to `main` with CI green.
 
 ---
@@ -191,4 +195,5 @@ criteria with evidence, and the branch merges to `main` with CI green.
 | Date | Change |
 |---|---|
 | 2026-09-05 | First version, written before any implementation commit. |
+| 2026-09-05 | Revised after the test writer reported six ambiguities. 2.7 now names two deciders, because the one it named could see neither half of what it asked for. 2.14 says employee↔service links are replaced as a set, which is what the API actually models. Part 3 now states which reading of 2.12 is intended — a window starting in the skipped hour is clipped to the first real instant — since the two readings agree only when the step divides the gap. Added 2.26 and 2.27 from two real defects the report exposed: the OpenAPI document declared 200 for every create and delete while the code returns 201 and 204, so the contract was lying about the API it describes and a generated client would be wrong; and the availability response never stated the step it was computed on, leaving a client unable to know what grid it received. **`CLAUDE.md`'s error-shape rule was also imprecise enough that the test writer resolved it by assertion and had to walk that back — it now says `fieldErrors` appears only on validation failures.** |
 | 2026-09-05 | Part 3 rewritten on two points the implementation disproved, and three criteria added. Tenant access moves from `@PreAuthorize` to the security filter chain, because method security runs after argument resolution and an outsider was getting 400 for a missing parameter before the tenant check ran at all (2.24). Moving it exposed a second defect: Spring's default `AccessDeniedHandler` calls `sendError`, the container re-dispatches as ERROR, every `OncePerRequestFilter` correctly declines to run twice, and the second pass therefore looks anonymous — turning a correct 403 into a 401 telling an authenticated caller to authenticate (2.23). The column-naming convention is settled in both directions rather than excepted for `working_hours` (2.25). **The first two were defects in this document's architecture section, found by building it.** |

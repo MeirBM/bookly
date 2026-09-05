@@ -6,6 +6,8 @@ import com.bookly.employee.dto.EmployeeRequests.EmployeeResponse;
 import com.bookly.employee.dto.EmployeeRequests.SetServices;
 import com.bookly.employee.dto.EmployeeRequests.WorkingHoursResponse;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -36,6 +38,10 @@ public class EmployeeController {
 
     @PostMapping("/employees")
     @Operation(summary = "Add an employee")
+    @ApiResponses({
+            @ApiResponse(responseCode = "201", description = "Created"),
+            @ApiResponse(responseCode = "400", description = "Validation failed"),
+            @ApiResponse(responseCode = "403", description = "Not a member of this business")})
     public ResponseEntity<EmployeeResponse> create(@PathVariable UUID businessId,
                                                    @Valid @RequestBody CreateEmployee request) {
         EmployeeResponse created = directory.create(businessId, request);
@@ -52,6 +58,10 @@ public class EmployeeController {
 
     @DeleteMapping("/employees/{employeeId}")
     @Operation(summary = "Remove an employee")
+    @ApiResponses({
+            @ApiResponse(responseCode = "204", description = "Removed"),
+            @ApiResponse(responseCode = "403", description = "Not a member of this business"),
+            @ApiResponse(responseCode = "404", description = "No such employee here")})
     public ResponseEntity<Void> delete(@PathVariable UUID businessId,
                                        @PathVariable UUID employeeId) {
         directory.delete(businessId, employeeId);
@@ -68,6 +78,11 @@ public class EmployeeController {
 
     @PostMapping("/employees/{employeeId}/working-hours")
     @Operation(summary = "Add a working window; two on one weekday express a break")
+    @ApiResponses({
+            @ApiResponse(responseCode = "201", description = "Created"),
+            @ApiResponse(responseCode = "400", description = "The window does not end after it starts"),
+            @ApiResponse(responseCode = "403", description = "Not a member of this business"),
+            @ApiResponse(responseCode = "404", description = "No such employee here")})
     public ResponseEntity<WorkingHoursResponse> addWorkingHours(
             @PathVariable UUID businessId,
             @PathVariable UUID employeeId,
@@ -85,6 +100,10 @@ public class EmployeeController {
 
     @DeleteMapping("/working-hours/{workingHoursId}")
     @Operation(summary = "Remove a working window")
+    @ApiResponses({
+            @ApiResponse(responseCode = "204", description = "Removed"),
+            @ApiResponse(responseCode = "403", description = "Not a member of this business"),
+            @ApiResponse(responseCode = "404", description = "No such window here")})
     public ResponseEntity<Void> deleteWorkingHours(@PathVariable UUID businessId,
                                                    @PathVariable UUID workingHoursId) {
         directory.deleteWorkingHours(businessId, workingHoursId);

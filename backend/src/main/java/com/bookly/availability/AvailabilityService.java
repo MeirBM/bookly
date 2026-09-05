@@ -105,6 +105,7 @@ public class AvailabilityService {
                         entry.getValue().stream().sorted().toList()))
                 .toList();
 
-        return new AvailabilityResponse(serviceId, date.toString(), zone.getId(), slots);
+        return new AvailabilityResponse(
+                serviceId, date.toString(), zone.getId(), step.toMinutes(), slots);
     }
 }
