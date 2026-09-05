@@ -48,6 +48,16 @@ public class ApiException extends RuntimeException {
     }
 
     /**
+     * A resource that is absent, or belongs to a different business than the one in the path.
+     *
+     * <p>One answer for both, for the same reason {@link #noBusinessAccess()} exists: distinguishing
+     * them tells a caller which ids are real in someone else's business.
+     */
+    public static ApiException notFoundInBusiness(String code, String message) {
+        return new ApiException(HttpStatus.NOT_FOUND, code, message);
+    }
+
+    /**
      * Returned both when a business does not exist and when the caller is not a member of it.
      *
      * <p>Criterion 1.12: distinguishing the two tells an attacker which business ids are real.
