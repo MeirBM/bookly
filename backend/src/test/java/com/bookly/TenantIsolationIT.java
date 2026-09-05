@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
 import com.bookly.support.ApiIntegrationTest;
 import com.bookly.support.Routes;
 import com.fasterxml.jackson.databind.JsonNode;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
@@ -39,39 +40,72 @@ class TenantIsolationIT extends ApiIntegrationTest {
     /**
      * 1.10 — a user authenticated against Business A receives 403 on every tenant-scoped route of
      * Business B. One case per registered route.
+     *
+     * <p>The set is every route under {@code /api/} that is not on {@link Routes#PUBLIC_PATTERNS},
+     * not merely those whose path contains {@code {businessId}}. A route that names its resource
+     * some other way — {@code /api/appointments/{appointmentId}} — is the same defect wearing a
+     * different path, and selecting on {@code {businessId}} would generate no case for it at all.
+     *
+     * <p>Two case shapes, chosen structurally so neither can be skipped by omission:
+     * a route carrying a path variable is fired at a resource the caller has no claim to and must
+     * answer 403; a route carrying none cannot be addressed at another tenant's resource, so it is
+     * fired as the outsider and must disclose nothing about the other business.
      */
     @TestFactory
     @DisplayName("1.10 a member of business A is forbidden on every tenant-scoped route of business B")
     List<DynamicTest> outsiderIsForbiddenOnEveryTenantScopedRoute() {
         Account outsider = newAccount("outsider");
-        newBusiness(outsider, "Outsider's Own Business");
+        newBusiness(outsider, "Outsider Own Business");
 
         Account owner = newAccount("owner");
-        String otherBusinessId = newBusiness(owner, "Someone Else's Business").path("id").asText();
+        JsonNode otherBusiness = newBusiness(owner, "Someone Else Business");
+        String otherBusinessId = otherBusiness.path("id").asText();
+        String otherBusinessSlug = otherBusiness.path("slug").asText();
 
-        List<Routes.Route> routes = Routes.tenantScoped(handlerMapping);
-        assertThat(routes)
-                .as("no route containing %s was registered, so criterion 1.10 has nothing to "
-                        + "decide; either the tenant-scoped routes are missing or they do not take "
-                        + "the shape /api/businesses/{businessId}/... required by spec part 3",
-                        Routes.TENANT_PATH_VARIABLE)
+        List<Routes.Route> mustBeCovered = Routes.requiringIsolationCoverage(handlerMapping);
+        assertThat(mustBeCovered)
+                .as("every route under /api/ that is not on the public allowlist %s; an empty set "
+                        + "means the criterion has nothing to decide", Routes.PUBLIC_PATTERNS)
                 .isNotEmpty();
 
-        return routes.stream()
-                .map(route -> dynamicTest(route.toString(), () -> {
+        List<DynamicTest> cases = new ArrayList<>();
+        for (Routes.Route route : mustBeCovered) {
+            if (route.addressableByResourceId()) {
+                cases.add(dynamicTest(route + " [foreign id must be 403]", () -> {
                     String path = Routes.fill(route.pattern(), otherBusinessId);
                     Object requestBody = route.method() == HttpMethod.GET ? null : body();
                     ResponseEntity<String> response =
                             send(route.method(), path, requestBody, outsider.accessToken());
 
                     assertThat(response.getStatusCode().value())
-                            .as("%s as a non-member of that business", route)
+                            .as("%s addressed at a resource of a business the caller does not "
+                                    + "belong to", route)
                             .isEqualTo(403);
                     assertThat(String.valueOf(response.getBody()))
                             .as("the refusal must not leak the business it refused")
-                            .doesNotContain("Someone Else's Business");
-                }))
-                .toList();
+                            .doesNotContain("Someone Else Business", otherBusinessSlug);
+                }));
+            } else {
+                cases.add(dynamicTest(route + " [must disclose no other tenant]", () -> {
+                    Object requestBody = route.method() == HttpMethod.GET ? null : body();
+                    ResponseEntity<String> response =
+                            send(route.method(), route.pattern(), requestBody, outsider.accessToken());
+
+                    assertThat(response.getStatusCode().value())
+                            .as("%s as an authenticated outsider must not fail with a server error", route)
+                            .isBetween(200, 499);
+                    assertThat(String.valueOf(response.getBody()))
+                            .as("%s must disclose nothing about a business the caller does not "
+                                    + "belong to", route)
+                            .doesNotContain(otherBusinessId, otherBusinessSlug, "Someone Else Business");
+                }));
+            }
+        }
+
+        assertThat(cases)
+                .as("one case per route requiring coverage, so none can be skipped by omission")
+                .hasSameSizeAs(mustBeCovered);
+        return cases;
     }
 
     /**

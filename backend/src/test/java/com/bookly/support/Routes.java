@@ -16,11 +16,28 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandl
  * <p>Turn-1 spec, part 4: the tenant-isolation suite enumerates routes from
  * {@code RequestMappingHandlerMapping} rather than from a hand-maintained list, so a new
  * tenant-scoped route that nobody remembered to cover fails the build instead of passing unnoticed.
+ *
+ * <p>The classification is deliberately inverted: <strong>every</strong> route under {@code /api/}
+ * requires isolation coverage unless its exact path is on {@link #PUBLIC_PATTERNS}. Selecting
+ * tenant-scoped routes by looking for {@code {businessId}} in the path was the obvious reading of
+ * spec part 3 and it is a hole in the guardrail — {@code /api/appointments/{appointmentId}} and
+ * {@code /api/employees/{employeeId}} contain no {@code {businessId}}, so the suite would generate
+ * no cases for exactly the IDOR shape it exists to catch and the build would stay green. A new
+ * route now defaults to being checked; exempting one is a deliberate edit to the list below.
  */
 public final class Routes {
 
-    /** The path-variable name that marks a route as tenant-scoped. Spec part 3. */
+    /** The path variable that names a tenant directly. Spec part 3. */
     public static final String TENANT_PATH_VARIABLE = "{businessId}";
+
+    /**
+     * The only routes exempt from isolation coverage: the unauthenticated entry points, which have
+     * no caller to isolate yet. Exact patterns, not a prefix — a new route under {@code /api/auth/}
+     * has to be added here on purpose, having been thought about, rather than inheriting an
+     * exemption from where somebody happened to put it.
+     */
+    public static final Set<String> PUBLIC_PATTERNS = Set.of(
+            "/api/auth/register", "/api/auth/login", "/api/auth/refresh", "/api/auth/logout");
 
     private Routes() {}
 
@@ -30,9 +47,22 @@ public final class Routes {
             return method + " " + pattern;
         }
 
-        public boolean tenantScoped() {
+        /** Names a tenant directly. Kept for reporting; it is no longer what selects the cases. */
+        public boolean namesABusinessInThePath() {
             return pattern.contains(TENANT_PATH_VARIABLE);
         }
+
+        /**
+         * Carries a path variable, so it can be addressed at a resource belonging to someone else.
+         * That is the shape an isolation case can fire at directly.
+         */
+        public boolean addressableByResourceId() {
+            return pattern.contains("{");
+        }
+    }
+
+    public static boolean isPublic(Route route) {
+        return PUBLIC_PATTERNS.contains(route.pattern());
     }
 
     /** Every application route (under {@code /api/}), one entry per HTTP method it answers. */
@@ -52,15 +82,17 @@ public final class Routes {
         return routes;
     }
 
-    public static List<Route> tenantScoped(RequestMappingHandlerMapping mapping) {
-        return application(mapping).stream().filter(Route::tenantScoped).toList();
+    /**
+     * Every route that must be evidenced as isolated: all of {@code /api/} except the public
+     * allowlist. The default is coverage; invisibility has to be asked for.
+     */
+    public static List<Route> requiringIsolationCoverage(RequestMappingHandlerMapping mapping) {
+        return application(mapping).stream().filter(r -> !isPublic(r)).toList();
     }
 
-    /** Routes that require an authenticated caller: everything under /api/ except the auth endpoints. */
+    /** Routes requiring a token: the same set, since every non-public route is authenticated. */
     public static List<Route> authenticated(RequestMappingHandlerMapping mapping) {
-        return application(mapping).stream()
-                .filter(r -> !r.pattern().startsWith("/api/auth/"))
-                .toList();
+        return requiringIsolationCoverage(mapping);
     }
 
     private static Set<String> patternsOf(RequestMappingInfo info) {

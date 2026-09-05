@@ -32,7 +32,12 @@
                             }
                         }
                     }
-                }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
             },
             "post": {
                 "tags": [
@@ -81,7 +86,12 @@
                             }
                         }
                     }
-                }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
             }
         },
         "/api/auth/register": {
@@ -280,7 +290,12 @@
                             }
                         }
                     }
-                }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
             }
         }
     },
@@ -329,7 +344,7 @@
                     },
                     "password": {
                         "type": "string",
-                        "maxLength": 128,
+                        "maxLength": 72,
                         "minLength": 12
                     },
                     "fullName": {
@@ -390,6 +405,13 @@
                         "minLength": 1
                     }
                 }
+            }
+        },
+        "securitySchemes": {
+            "bearerAuth": {
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "JWT"
             }
         }
     }
