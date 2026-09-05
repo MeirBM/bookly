@@ -1,0 +1,17 @@
+# Configuration for the CI secret scan (criterion 1.19).
+#
+# The default rules are kept in full and extended, never replaced: an allowlist that
+# quietly disables detection is worse than no scan, because it is trusted.
+[extend]
+useDefault = true
+
+[allowlist]
+description = """
+Lines carrying an explicit allow-secret marker. This is the same marker the pre-commit
+hook honours, so a fixture is exempted once, in one vocabulary, on the line beside the
+value — where a reviewer reading the diff sees the exemption and the thing exempted at
+the same time. A path- or file-based allowlist would have hidden every future secret in
+those files as well.
+"""
+regexTarget = "line"
+regexes = ['''allow-secret''']
