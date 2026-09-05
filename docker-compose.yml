@@ -1,0 +1,63 @@
+# Local development. `docker compose up` is turn-1 success criterion 1.1.
+# Credentials here are local-only development values and are deliberately not
+# secrets; anything real is supplied by the environment (see .env.example).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: bookly
+      POSTGRES_USER: bookly
+      POSTGRES_PASSWORD: bookly
+    ports: ["5432:5432"]
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      # The backend waits for readiness, not merely for the container to exist.
+      test: ["CMD-SHELL", "pg_isready -U bookly -d bookly"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: jdbc:postgresql://postgres:5432/bookly
+      DATABASE_USER: bookly
+      DATABASE_PASSWORD: bookly
+      REDIS_HOST: redis
+      # Local development: the API map is convenient here, and must not be public in a deployment.
+      EXPOSE_API_DOCS: "true"
+      # No default in application.yml: the app refuses to start without this.
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env - see .env.example}
+    ports: ["8080:8080"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
+  frontend:
+    build: ./frontend
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+    ports: ["3000:3000"]
+    depends_on:
+      backend: {condition: service_healthy}
+
+volumes:
+  postgres-data:
+  redis-data:
