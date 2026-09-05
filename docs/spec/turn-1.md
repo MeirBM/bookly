@@ -54,6 +54,7 @@ Each resolves to one true/false answer, and each names the test that decides it.
 | 1.22 | The unauthenticated `/api/auth/*` endpoints are rate limited per caller, and a failed login is recorded in the log without naming the account | `AuthRateLimitIT` |
 | 1.23 | A malformed request — a non-UUID path variable, an unparseable body, an unsupported method, an unknown path — returns 4xx, not 500, and writes no stack trace | `MalformedRequestIT` |
 | 1.24 | The OpenAPI document and Swagger UI are not served unless explicitly enabled | `ApiDocsExposureIT` |
+| 1.25 | Stored browser session state counts as a session only if it can actually authenticate a request; state that cannot is treated as signed out | `dashboard.spec.ts` |
 
 **Not claimed by this turn:** password reset, email verification, roles beyond `BUSINESS_OWNER`,
 and any business data beyond the business record itself. Those are turn 2 or the out-of-scope list.
@@ -140,7 +141,7 @@ The warnings that would be given to a colleague starting this turn.
 
 ## Definition of done for this turn
 
-All twenty-four criteria in part 2 are true, `docs/audit/turn-1.md` records the five Merge-Readiness
+All twenty-five criteria in part 2 are true, `docs/audit/turn-1.md` records the five Merge-Readiness
 criteria with evidence, and the branch merges to `main` with CI green.
 
 ---
@@ -167,4 +168,5 @@ and it is the half that survives when notifications arrive and this endpoint sto
 |---|---|
 | 2026-09-05 | First version, written before any implementation commit. |
 | 2026-09-05 | Revised after `spec-test-writer` reported seven ambiguities it could not resolve without guessing. 1.7 names *which* family; 1.9 names the log level, since as written it was unsatisfiable by any implementation once the servlet container logs request bodies at TRACE; 1.11 says ignored rather than rejected; 1.12 puts response timing out of scope with a reason; slug normalisation is defined, having been named as a pitfall but never specified. Added 1.20 (the document never said how to authenticate) and 1.21 (credential records printed their password through the generated `toString()`). **These were defects in this document, not in the code** — which is the point of having tests written by someone who cannot see the implementation. |
+| 2026-09-05 | 1.25 added after the browser test for 1.17 was written. The test author asked what "unauthenticated" means and showed that the two readings disagree: stored state holding no access token was counted as a session, leaving the visitor on a dashboard that could never load and offering no route back to the login form. Not an authentication bypass — the server refuses every such request — but a dead end, so the stricter reading is now the specified one. The ambiguity was in this document; the test found it by asking rather than guessing. |
 | 2026-09-05 | Revised again after the security review. 1.7 extended to concurrent refreshes, because the sequential test passed while a race defeated reuse detection entirely. Added 1.22 (nothing limited the unauthenticated surface, and a failed login left no trace at any level), 1.23 (Spring MVC's own 4xx were being converted to 500 with a logged stack trace) and 1.24 (the API map was public). Registration's enumeration oracle recorded above as an accepted risk rather than left as an unnoticed contradiction between this document and `CLAUDE.md`. |

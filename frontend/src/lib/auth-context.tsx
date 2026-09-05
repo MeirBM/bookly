@@ -49,13 +49,35 @@ function readTokens(): TokenPair | null {
   if (raw !== cachedRaw) {
     cachedRaw = raw;
     try {
-      cachedTokens = raw ? (JSON.parse(raw) as TokenPair) : null;
+      cachedTokens = raw ? asTokenPair(JSON.parse(raw)) : null;
     } catch {
       // Corrupt storage: start signed out rather than crash on boot.
       cachedTokens = null;
     }
   }
   return cachedTokens;
+}
+
+/**
+ * Accepts stored state only if it can actually authenticate a request.
+ *
+ * <p>The presence of the key is not the same as having a session. An entry holding no access
+ * token — a partial write, an interrupted logout, hand-edited storage — used to count as signed in,
+ * which left the visitor on a dashboard that could never load data and gave them no route to the
+ * login form that would fix it. Not an authentication bypass, since the server still refuses every
+ * request; a dead end, which is its own kind of failure.
+ */
+function asTokenPair(value: unknown): TokenPair | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  const candidate = value as Partial<TokenPair>;
+  const usable =
+    typeof candidate.accessToken === "string" &&
+    candidate.accessToken.length > 0 &&
+    typeof candidate.refreshToken === "string" &&
+    candidate.refreshToken.length > 0;
+  return usable ? (candidate as TokenPair) : null;
 }
 
 function notify() {

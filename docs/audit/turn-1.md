@@ -10,7 +10,7 @@ The five criteria below are answered with evidence — a test name, a commit, a 
 
 ## 1. Functional completeness — does it match the specification?
 
-24 of 24 criteria implemented and demonstrated. The mapping from criterion to the test that decides
+25 of 25 criteria implemented and demonstrated. The mapping from criterion to the test that decides
 it:
 
 | # | Criterion | Test |
@@ -31,7 +31,7 @@ it:
 | 1.14 | Slug unique | `BusinessCreationIT.slugIsUnique`, `.schemaRejectsAMalformedSlug` |
 | 1.15 | Every timestamp is `timestamptz` | `SchemaConventionsIT.allTimestampsAreTimestamptz`, `.auditColumnsAreTimestamps` |
 | 1.16 | Every route documented | `OpenApiIT.documentsEveryRoute` |
-| 1.17 | `/dashboard` redirects when unauthenticated | `frontend/src/app/dashboard/layout.tsx`; **see §1a — not automated** |
+| 1.17 | `/dashboard` redirects when unauthenticated | `dashboard.spec.ts` — 3 cases |
 | 1.18 | CI green on the PR | run linked in §5 |
 | 1.19 | Secret scan over full history | same run; `.gitleaks.toml` |
 | 1.20 | Document declares how to authenticate | `OpenApiIT.documentsHowACallerAuthenticates` |
@@ -39,14 +39,25 @@ it:
 | 1.22 | Auth endpoints rate limited; failed login recorded without the address | `AuthRateLimitIT` (2 cases) |
 | 1.23 | Malformed requests answer 4xx, not 500 | `MalformedRequestIT` (5 cases) |
 | 1.24 | API document not served unless enabled | `ApiDocsExposureIT` (5 cases, both directions) |
+| 1.25 | Unusable stored session state is treated as signed out | `dashboard.spec.ts` |
 
-### 1a. What is *not* covered, stated plainly
+### 1a. How 1.17 was closed, and what it found
 
-**Criterion 1.17 has no automated test.** The spec names `dashboard.spec.ts`; no browser test
-harness was set up, and the redirect is verified only by hand. It is the one criterion in this turn
-resting on a claim rather than on evidence, and by this pack's own standard that means 1.17 is
-**unmet as specified** even though the behaviour works. Carried into turn 2, where the dashboard
-grows enough screens to justify the harness.
+The first version of this audit recorded 1.17 as **unmet**: the redirect worked and had been checked
+by hand, but the spec named an automated test and there was none. Rather than reinterpret the
+criterion to match what was built, a Playwright harness was added and the assertions were written by
+the spec-only agent.
+
+Writing them produced a defect and a new criterion. Asked what "unauthenticated" means, the test
+author showed the two available readings disagree: stored session state holding no access token was
+counted as a session, leaving a visitor on a dashboard that could never load data with no route back
+to the login form. Not an authentication bypass — the server refuses every such request — but a dead
+end. The stricter reading is now criterion **1.25** and the guard validates the stored shape.
+
+The regression case matters more than the criterion's own. `keepsAVisitorWithAStoredSessionOn
+/dashboard` spends the full no-redirect window on the page without being bounced, so the redirect
+test cannot pass against a component that redirects unconditionally — which is close to the original
+bug, where the redirect fired before storage had been read and bounced signed-in users on reload.
 
 ---
 
@@ -83,9 +94,13 @@ weaker than the rule asks for. Recorded rather than tidied away.
 Tests run: 27, Failures: 0, Errors: 0, Skipped: 0   (surefire, unit)
 Tests run: 42, Failures: 0, Errors: 0, Skipped: 0   (failsafe, integration)
 BUILD SUCCESS
+
+cd frontend && npm run test:e2e
+4 passed (10.6s)
 ```
 
-69 tests across 15 classes, on real PostgreSQL 16 and Redis 7 via Testcontainers. No H2 anywhere.
+**73 tests**: 69 backend across 15 classes on real PostgreSQL 16 and Redis 7 via Testcontainers — no
+H2 anywhere — plus 4 browser tests against the standalone build that actually ships.
 
 ---
 
@@ -172,11 +187,13 @@ replacement dies with it.
 
 ## Verdict
 
-**Ready to merge, with one criterion explicitly unmet.**
+**Ready to merge.** All 25 criteria are demonstrated by a named test or a linked CI run; none rests
+on a claim.
 
-Criterion 1.17 (the dashboard redirect) has no automated test and rests on manual verification. By
-this pack's rule that is not satisfied, and it is recorded as such rather than reinterpreted to fit
-what was built. Everything else is demonstrated by a named test or a linked run.
+The one criterion that was unmet when this audit was first written — 1.17, verified only by hand —
+was closed by building the harness rather than by softening the criterion. Doing so surfaced a
+further defect and added criterion 1.25, which is the argument for the gate: the cost of taking
+1.17 seriously was an hour, and it returned a dead-end state nobody had thought to look for.
 
 The property this turn existed to establish — that one business cannot reach another's data — is
 covered by five cases generated from Spring's own route table, so a tenant-scoped route added in

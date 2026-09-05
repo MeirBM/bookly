@@ -24,7 +24,11 @@ export default defineConfig({
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    command: "npm run build && npm run start",
+    // next start does not work with output: "standalone" - it warns and serves something
+    // other than what ships. Running the standalone server, with the static assets copied
+    // beside it exactly as the Dockerfile does, means these tests exercise the deployed
+    // artifact rather than a development approximation of it.
+    command: "npm run build:standalone && node .next/standalone/server.js",
     url: "http://localhost:3000",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
