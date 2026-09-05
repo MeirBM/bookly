@@ -65,6 +65,9 @@ Each resolves to one true/false answer and names the test that decides it.
 | 2.17 | Every new route added in this turn is tenant-scoped and refuses a caller who is not a member | `TenantIsolationIT` — generated from the route table, so this criterion cannot be met by forgetting a route |
 | 2.18 | An employee, service, working window or blocked time belonging to another business cannot be read, modified or deleted, even by id | `TenantIsolationIT.crossTenantResourceIsRefused` |
 | 2.19 | Deleting a service removes its employee links and does not orphan rows | `BusinessConfigurationIT.deletingAServiceRemovesItsLinks` |
+| 2.23 | A caller refused access to a business receives 403 with the standard error body — never 401, which would tell them to authenticate when they already have and it cannot help | `TenantIsolationIT`, `AccessDeniedContractIT` |
+| 2.24 | Authorization is decided before argument validation: an outsider addressing a tenant-scoped route with missing or malformed query parameters still receives 403, not 400 | `AccessDeniedContractIT.authorizationPrecedesValidation` |
+| 2.25 | Schema naming holds both ways: every `*_at` column is `timestamptz` and every `*_local` column is `time without time zone` | `SchemaConventionsIT` |
 
 ### Interface
 
@@ -98,6 +101,20 @@ represented as **two windows on the same day** rather than as a separate breaks 
 intersection logic then handles breaks, split shifts and part days without a second concept. Blocked
 times are absolute instant ranges, and one with no employee applies to the whole business, which is
 how a public holiday is expressed.
+
+**Tenant access is decided in the security filter chain, not by `@PreAuthorize`.** The first
+version of this document said the opposite, and building it showed why that was wrong: method
+security runs *after* Spring has resolved the handler's arguments, so a request missing a required
+query parameter was answered 400 before anyone asked whether the caller was entitled to the business
+at all. Authorization belongs before input validation, or an outsider gets to probe what an endpoint
+accepts. Moving it also removes the silent failure `@PreAuthorize` carries — an annotation that does
+nothing when method security is disabled, or when the method is called from within the same bean,
+looks exactly like one that works. It remains one bean, one call shape, one place to audit.
+
+**Column naming is a checkable convention, not a habit:** `*_at` is an instant stored `timestamptz`;
+`*_local` is a wall-clock time in the business's own zone stored `time`. Both halves are asserted.
+A rule enforced in only one direction would let a genuine instant stored as `time` pass unnoticed,
+which is how a booking ends up an hour out twice a year.
 
 Availability in this turn lives at `/api/businesses/{businessId}/availability` and is
 **authenticated**, like every other route here. The unauthenticated equivalent that the public
@@ -164,7 +181,7 @@ The warnings that would be given to a colleague starting this turn.
 
 ## Definition of done for this turn
 
-All twenty-two criteria in part 2 are true, `docs/audit/turn-2.md` records the five Merge-Readiness
+All twenty-five criteria in part 2 are true, `docs/audit/turn-2.md` records the five Merge-Readiness
 criteria with evidence, and the branch merges to `main` with CI green.
 
 ---
@@ -174,3 +191,4 @@ criteria with evidence, and the branch merges to `main` with CI green.
 | Date | Change |
 |---|---|
 | 2026-09-05 | First version, written before any implementation commit. |
+| 2026-09-05 | Part 3 rewritten on two points the implementation disproved, and three criteria added. Tenant access moves from `@PreAuthorize` to the security filter chain, because method security runs after argument resolution and an outsider was getting 400 for a missing parameter before the tenant check ran at all (2.24). Moving it exposed a second defect: Spring's default `AccessDeniedHandler` calls `sendError`, the container re-dispatches as ERROR, every `OncePerRequestFilter` correctly declines to run twice, and the second pass therefore looks anonymous — turning a correct 403 into a 401 telling an authenticated caller to authenticate (2.23). The column-naming convention is settled in both directions rather than excepted for `working_hours` (2.25). **The first two were defects in this document's architecture section, found by building it.** |
