@@ -126,6 +126,21 @@
 
     <dependencyManagement>
         <dependencies>
+            <!--
+              Docker Engine 29 refuses API versions below 1.40, and the docker-java bundled with
+              Testcontainers 1.21.3 negotiates 1.32 - integration tests then fail with "client
+              version 1.32 is too old" before a single container starts. Pinned ahead of the BOM.
+            -->
+            <dependency>
+                <groupId>com.github.docker-java</groupId>
+                <artifactId>docker-java-api</artifactId>
+                <version>3.5.1</version>
+            </dependency>
+            <dependency>
+                <groupId>com.github.docker-java</groupId>
+                <artifactId>docker-java-transport-zerodep</artifactId>
+                <version>3.5.1</version>
+            </dependency>
             <dependency>
                 <groupId>org.testcontainers</groupId>
                 <artifactId>testcontainers-bom</artifactId>
@@ -166,9 +181,29 @@
             <!-- Surefire runs unit tests only: its default includes do not match *IT.
                  Failsafe runs the Testcontainers suites at verify. The split is what lets
                  the pre-commit hook stay fast (-DskipITs) while CI runs everything. -->
+            <!--
+              Docker Engine 29 refuses API versions below 1.40, and docker-java negotiates 1.32 by
+              default: every Testcontainers suite fails with "client version 1.32 is too old"
+              before a container starts. 1.41 rather than something newer because it is supported
+              by every daemon from Docker 20.10 onwards, so this does not narrow where CI can run.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <api.version>1.41</api.version>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <api.version>1.41</api.version>
+                    </systemPropertyVariables>
+                </configuration>
                 <executions>
                     <execution>
                         <goals>
@@ -180,4 +215,45 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!--
+          Colima puts the Docker socket in the user's home rather than at /var/run/docker.sock, and
+          Testcontainers then reports "Could not find a valid Docker environment". Activated by the
+          socket's existence, so a machine using Docker Desktop and the Linux CI runner are both
+          unaffected. Turn-1 spec, pitfall 5.
+        -->
+        <profile>
+            <id>colima</id>
+            <activation>
+                <file>
+                    <exists>${user.home}/.colima/default/docker.sock</exists>
+                </file>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <environmentVariables>
+                                <DOCKER_HOST>unix://${user.home}/.colima/default/docker.sock</DOCKER_HOST>
+                                <TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE>/var/run/docker.sock</TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE>
+                            </environmentVariables>
+                        </configuration>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <configuration>
+                            <environmentVariables>
+                                <DOCKER_HOST>unix://${user.home}/.colima/default/docker.sock</DOCKER_HOST>
+                                <TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE>/var/run/docker.sock</TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE>
+                            </environmentVariables>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
