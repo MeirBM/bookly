@@ -33,9 +33,14 @@ public class AuthService {
      * A valid BCrypt hash of a value nobody knows. Verified against when no user matches, so that
      * an unknown email costs the same time as a wrong password — otherwise response latency
      * enumerates registered accounts, and criterion 1.5 is satisfied only on paper.
+     *
+     * <p>Derived at startup from the injected encoder rather than hardcoded. BCrypt takes its cost
+     * from the hash it is verifying, not from the encoder's configured strength, so a hardcoded
+     * cost-10 constant would silently stop matching the moment anyone raised
+     * {@code bookly.security.bcrypt-strength} — and the timing signal this exists to remove would
+     * return, through a config change with no visible connection to this file.
      */
-    private static final String DUMMY_HASH =
-            "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
+    private final String dummyHash;
 
     private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
@@ -60,6 +65,7 @@ public class AuthService {
         this.jwtService = jwtService;
         this.jwtProperties = jwtProperties;
         this.clock = clock;
+        this.dummyHash = passwordEncoder.encode(UUID.randomUUID().toString());
     }
 
     @Transactional
@@ -83,14 +89,25 @@ public class AuthService {
         }
     }
 
-    @Transactional
+    /**
+     * Deliberately not {@code @Transactional}. Hibernate takes a pooled connection at the first
+     * query and holds it until commit, which would span the BCrypt verification below — ~100ms by
+     * design. With Hikari's default pool of ten, a few dozen concurrent unauthenticated login
+     * attempts would exhaust the pool and stall every other request in the application, including
+     * the membership lookup every tenant-scoped read depends on. The only write here is the token
+     * insert, which manages its own transaction.
+     */
     public TokenPairResponse login(LoginRequest request) {
         User user = userRepository.findByEmailIgnoreCase(request.email().trim()).orElse(null);
         if (user == null) {
-            passwordEncoder.matches(request.password(), DUMMY_HASH);
+            passwordEncoder.matches(request.password(), dummyHash);
+            // Logged without the email: an attacker's guesses would otherwise write a list of
+            // addresses into the log, and the operator only needs to see that it is happening.
+            log.info("Failed login for unknown account");
             throw ApiException.invalidCredentials();
         }
         if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
+            log.info("Failed login for user {}", user.getId());
             throw ApiException.invalidCredentials();
         }
         return issueTokenPair(user, UUID.randomUUID());
@@ -130,7 +147,8 @@ public class AuthService {
 
     @Transactional
     public void logout(String presentedToken) {
-        refreshTokenRepository.findByTokenHash(hash(presentedToken)).ifPresent(
+        // Unlocked read: logout revokes the family outright, so there is no check-then-act to race.
+        refreshTokenRepository.findFirstByTokenHash(hash(presentedToken)).ifPresent(
                 token -> refreshTokenRevoker.revokeFamily(token.getFamilyId(), clock.instant()));
     }
 

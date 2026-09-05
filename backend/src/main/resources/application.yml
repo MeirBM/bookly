@@ -3,9 +3,12 @@ spring:
     name: bookly-backend
 
   datasource:
-    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/bookly}
-    username: ${DATABASE_USER:bookly}
-    password: ${DATABASE_PASSWORD:bookly}
+    # No defaults, for the same reason bookly.jwt.secret has none: a deployment that forgets
+    # DATABASE_PASSWORD should fail loudly at startup, not quietly connect to whatever database
+    # answers on localhost with the development credentials and then serve traffic from it.
+    url: ${DATABASE_URL}
+    username: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD}
 
   jpa:
     open-in-view: false            # an entity must not be lazily loaded from a view layer
@@ -39,8 +42,20 @@ bookly:
     # No default. The application must refuse to start rather than run on a known key.
     secret: ${JWT_SECRET}
     access-token-ttl: PT15M
-    refresh-token-ttl: P30D
+    # Was 30 days. Both tokens sit under one localStorage key, so a single script read yields
+    # both and the 15-minute access lifetime bounded nothing an attacker gained. Seven days is
+    # proportionate to a business owner's working week.
+    refresh-token-ttl: P7D
     issuer: bookly
+
+  security:
+    rate-limit:
+      max-requests: 20
+      window: PT1M
+    # The document is a complete map of the API surface. Criterion 1.16 requires it to exist and
+    # be complete; it does not require it to be public. On for local development, off by default
+    # so a deployment does not publish it by omission.
+    expose-api-docs: ${EXPOSE_API_DOCS:false}
 
 management:
   endpoints:

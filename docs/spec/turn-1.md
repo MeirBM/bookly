@@ -36,12 +36,12 @@ Each resolves to one true/false answer, and each names the test that decides it.
 | 1.4 | `POST /api/auth/login` with correct credentials returns an access token and a refresh token | `AuthFlowIT.loginReturnsTokenPair` |
 | 1.5 | Login with a wrong password returns 401, and the response body is byte-identical to the body returned for an unknown email | `AuthFlowIT.loginFailureDoesNotRevealAccountExistence` |
 | 1.6 | `POST /api/auth/refresh` returns a new token pair, and the presented refresh token is thereafter rejected with 401 | `RefreshRotationIT.rotatedTokenIsRejectedOnReuse` |
-| 1.7 | A refresh token reused after rotation invalidates the whole token family for that user | `RefreshRotationIT.reuseRevokesFamily` |
+| 1.7 | A refresh token reused after rotation revokes every token in **the family that token belongs to** (not every family of that user; a second login starts its own family and is unaffected), and does so **even when the two refreshes arrive concurrently** | `RefreshRotationIT.reuseRevokesFamily` |
 | 1.8 | An expired access token is rejected with 401 on every authenticated route | `AuthFlowIT.expiredAccessTokenRejected` |
-| 1.9 | Stored passwords are BCrypt hashes; the plaintext appears in no row and in no log line | `PasswordStorageIT.passwordIsNeverStoredOrLoggedInPlaintext` |
+| 1.9 | Stored passwords are BCrypt hashes; the plaintext appears in no column of any table, in no `com.bookly` log line at any level, and in no log line at all at INFO or above. (Below INFO the servlet container echoes the raw request body by construction, so a stricter claim would be unsatisfiable rather than merely unmet.) | `PasswordStorageIT.passwordIsNeverStoredOrLoggedInPlaintext` |
 | 1.10 | A user authenticated against Business A receives 403 on every tenant-scoped route of Business B | `TenantIsolationIT` — one parameterised case per registered route |
-| 1.11 | A `businessId` supplied in a request **body** never affects which business is read or written | `TenantIsolationIT.bodyBusinessIdIsIgnored` |
-| 1.12 | A request for a business that does not exist and a request for a business the caller is not a member of return responses that cannot be distinguished | `TenantIsolationIT.absentAndForbiddenAreIndistinguishable` |
+| 1.11 | A `businessId` supplied in a request **body** is *ignored*, not rejected: the request still succeeds and the field has no effect on which business is read or written | `TenantIsolationIT.bodyBusinessIdIsIgnored` |
+| 1.12 | A request for a business that does not exist and one for a business the caller is not a member of return the same status, headers and body bytes. Response *timing* is out of scope for this turn: the two share a code path, and defending a timing oracle properly needs measurement this turn cannot supply | `TenantIsolationIT.absentAndForbiddenAreIndistinguishable` |
 | 1.13 | `POST /api/businesses` creates a business, makes the creator its `BUSINESS_OWNER`, and assigns a unique slug | `BusinessCreationIT.creatorBecomesOwner` |
 | 1.14 | Two businesses cannot hold the same slug | `BusinessCreationIT.slugIsUnique` |
 | 1.15 | Every timestamp column added in this turn is `timestamptz` | `SchemaConventionsIT.allTimestampsAreTimestamptz` — reads `information_schema` |
@@ -49,6 +49,11 @@ Each resolves to one true/false answer, and each names the test that decides it.
 | 1.17 | The frontend redirects an unauthenticated visit to `/dashboard` to `/login` | `dashboard.spec.ts` |
 | 1.18 | CI runs the full suite on the pull request and is green | the linked run in `docs/audit/turn-1.md` |
 | 1.19 | The secret scan runs over the full history, not only the tip, and finds nothing | the same CI run |
+| 1.20 | The OpenAPI document declares how a caller authenticates, not only each route's status codes | `OpenApiIT.documentsHowACallerAuthenticates` |
+| 1.21 | No DTO carrying a credential — **request or response** — exposes it through `toString()`. Spring logs handler return values as well as arguments, so a response object leaks by the same mechanism as a request one | `CredentialMaskingTest` |
+| 1.22 | The unauthenticated `/api/auth/*` endpoints are rate limited per caller, and a failed login is recorded in the log without naming the account | `AuthRateLimitIT` |
+| 1.23 | A malformed request — a non-UUID path variable, an unparseable body, an unsupported method, an unknown path — returns 4xx, not 500, and writes no stack trace | `MalformedRequestIT` |
+| 1.24 | The OpenAPI document and Swagger UI are not served unless explicitly enabled | `ApiDocsExposureIT` |
 
 **Not claimed by this turn:** password reset, email verification, roles beyond `BUSINESS_OWNER`,
 and any business data beyond the business record itself. Those are turn 2 or the out-of-scope list.
@@ -66,6 +71,25 @@ membership is decided and exactly one place to audit. Repositories touching tena
 it, and neither alone is the design. Authentication state lives entirely in the tokens plus the
 `refresh_tokens` table; no HTTP session, because the same API must serve Android and iOS clients
 that have no cookie jar.
+
+**Slug normalisation**, left undefined in the first version of this document and therefore untestable
+at its edges: strip accents to ASCII, lowercase, replace every run of non-alphanumeric characters
+with a single hyphen, trim leading and trailing hyphens, truncate to 60 characters, then trim a
+trailing hyphen again — truncation can land mid-hyphen, and a trailing hyphen violates the
+`businesses_slug_shape` CHECK, which would surface as an insert failure rather than a validation
+error. A name that normalises to nothing — one written entirely in a non-Latin script, say — becomes
+`business`. Collisions take the suffix `-2`, `-3`, and so on, **appended after truncation**, so a
+slug may reach 62 characters; shortening the base to hold 60 was the alternative, and appending was
+chosen because it keeps a business's slug a stable prefix of its name rather than silently changing
+where the name is cut when an unrelated business registers. Transliteration is explicitly *not*
+attempted: it needs a per-language table, and getting a business's own name subtly wrong in its
+public URL is worse than a neutral slug.
+
+**Redis** holds the rate-limit counters and nothing else. It is the first justified use in the
+project: the count must be shared across instances and may be lost without harm. The limiter fails
+*open* — if Redis is unreachable the request proceeds — because refusing every login while a cache
+is down turns a cache outage into a total outage, and this control mitigates an attack rather than
+protecting correctness.
 
 ---
 
@@ -116,5 +140,31 @@ The warnings that would be given to a colleague starting this turn.
 
 ## Definition of done for this turn
 
-All nineteen criteria in part 2 are true, `docs/audit/turn-1.md` records the five Merge-Readiness
+All twenty-four criteria in part 2 are true, `docs/audit/turn-1.md` records the five Merge-Readiness
 criteria with evidence, and the branch merges to `main` with CI green.
+
+---
+
+## Accepted risk: registration discloses whether an email is registered
+
+Criterion 1.3 requires `POST /api/auth/register` to answer 409 for an address that already has an
+account. That makes the endpoint an account-enumeration oracle, and it contradicts `CLAUDE.md`'s
+rule that an error must never reveal whether an email is registered — the same property
+`AuthService.login` spends a dummy BCrypt verification to protect. The two rules disagree, and the
+disagreement is recorded here rather than discovered later.
+
+The standard fix is to answer 201 either way and tell the real owner by email. Notifications are on
+the out-of-scope list for these three turns, so that path does not exist yet and a 409 that a user
+can act on is better than a silent no-op. **The 409 stays, deliberately, and rate limiting (1.22)
+bounds how fast a list can be walked.** The constant-time login work also stays: it costs nothing,
+and it is the half that survives when notifications arrive and this endpoint stops answering.
+
+---
+
+## Revision log
+
+| Date | Change |
+|---|---|
+| 2026-09-05 | First version, written before any implementation commit. |
+| 2026-09-05 | Revised after `spec-test-writer` reported seven ambiguities it could not resolve without guessing. 1.7 names *which* family; 1.9 names the log level, since as written it was unsatisfiable by any implementation once the servlet container logs request bodies at TRACE; 1.11 says ignored rather than rejected; 1.12 puts response timing out of scope with a reason; slug normalisation is defined, having been named as a pitfall but never specified. Added 1.20 (the document never said how to authenticate) and 1.21 (credential records printed their password through the generated `toString()`). **These were defects in this document, not in the code** — which is the point of having tests written by someone who cannot see the implementation. |
+| 2026-09-05 | Revised again after the security review. 1.7 extended to concurrent refreshes, because the sequential test passed while a race defeated reuse detection entirely. Added 1.22 (nothing limited the unauthenticated surface, and a failed login left no trace at any level), 1.23 (Spring MVC's own 4xx were being converted to 500 with a logged stack trace) and 1.24 (the API map was public). Registration's enumeration oracle recorded above as an accepted risk rather than left as an unnoticed contradiction between this document and `CLAUDE.md`. |

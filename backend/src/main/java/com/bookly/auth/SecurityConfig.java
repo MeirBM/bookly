@@ -2,6 +2,8 @@ package com.bookly.auth;
 
 import com.bookly.common.error.ApiError;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.swagger.v3.oas.annotations.enums.SecuritySchemeType;
+import io.swagger.v3.oas.annotations.security.SecurityScheme;
 import java.time.Clock;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -9,6 +11,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.security.authorization.AuthorizationDecision;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -21,6 +24,14 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 
 @Configuration
 @EnableWebSecurity
+// The OpenAPI document described every route's status codes but never said how a caller
+// authenticates, so a client had to guess the scheme. Declaring it completes the contract
+// and lets generated clients and Swagger UI send a token.
+@SecurityScheme(
+        name = "bearerAuth",
+        type = SecuritySchemeType.HTTP,
+        scheme = "bearer",
+        bearerFormat = "JWT")
 // Without this, every @PreAuthorize in the project is decorative and TenantGuard is never
 // consulted. Turn-1 spec, pitfall 1 — the failure is silent, which is why it is named.
 @EnableMethodSecurity
@@ -30,7 +41,10 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http,
                                            JwtAuthenticationFilter jwtFilter,
-                                           AuthenticationEntryPoint entryPoint) throws Exception {
+                                           AuthenticationEntryPoint entryPoint,
+                                           @Value("${bookly.security.expose-api-docs:false}")
+                                           boolean exposeApiDocs) throws Exception {
+        String[] apiDocPaths = {"/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html"};
         return http
                 // No cookies are used, so there is no cookie for a third-party site to ride on.
                 // The same API must serve Android and iOS clients that have no cookie jar.
@@ -39,8 +53,11 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
-                        .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html")
-                            .permitAll()
+                        // The document is a complete map of the API surface. Criterion 1.16
+                        // requires it to exist and be complete, not to be public.
+                        .requestMatchers(apiDocPaths)
+                            .access((authentication, context) -> new AuthorizationDecision(
+                                    exposeApiDocs))
                         .anyRequest().authenticated())
                 .exceptionHandling(e -> e.authenticationEntryPoint(entryPoint))
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)

@@ -35,6 +35,8 @@ services:
       DATABASE_USER: bookly
       DATABASE_PASSWORD: bookly
       REDIS_HOST: redis
+      # Local development: the API map is convenient here, and must not be public in a deployment.
+      EXPOSE_API_DOCS: "true"
       # No default in application.yml: the app refuses to start without this.
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env - see .env.example}
     ports: ["8080:8080"]

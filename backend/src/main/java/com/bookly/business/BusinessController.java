@@ -6,6 +6,7 @@ import com.bookly.business.dto.CreateBusinessRequest;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.net.URI;
@@ -24,6 +25,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/businesses")
 @Tag(name = "Businesses")
+@SecurityRequirement(name = "bearerAuth")
 public class BusinessController {
 
     private final BusinessService businessService;

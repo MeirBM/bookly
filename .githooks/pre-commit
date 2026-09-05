@@ -9,6 +9,8 @@ staged=$(git diff --cached --name-only --diff-filter=ACM)
 
 # --- 1. Secrets -------------------------------------------------------------
 # History is permanent and sits in every clone. A committed key is a compromised key.
+# Checked in every file. A quoted literal after the delimiter is a value someone
+# typed, not an expression, which is what keeps this from matching ordinary code.
 patterns=(
   'BEGIN [A-Z ]*PRIVATE KEY'
   'sk-[A-Za-z0-9]{20,}'
@@ -18,18 +20,36 @@ patterns=(
   '(password|passwd|secret|api[_-]?key|token)[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"']{8,}'
   'postgres(ql)?://[^[:space:]"]*:[^[:space:]"@]+@'
 )
+
+# Checked only in configuration files, where `key: value` is an assignment rather than
+# an expression. YAML and .properties conventionally omit quotes, so requiring one let
+# `password: Pr0dP0stgres2026` through untouched. Applying this everywhere was tried and
+# reverted: without the quote it matches ordinary code such as `String accessToken = ...`,
+# and a hook that cries wolf is a hook people learn to bypass.
+config_patterns=(
+  '(password|passwd|secret|api[_-]?key|token)[[:space:]]*[:=][[:space:]]*[^"'"'"'[:space:]$][^[:space:]]{7,}'
+)
 for file in $staged; do
   case "$file" in
     *.example|*.md|.githooks/pre-commit) continue ;;
   esac
   [ -f "$file" ] || continue
-  for p in "${patterns[@]}"; do
+
+  file_patterns=("${patterns[@]}")
+  case "$file" in
+    *.yml|*.yaml|*.properties|*.env|*.conf|*.ini|*.toml)
+      file_patterns+=("${config_patterns[@]}") ;;
+  esac
+
+  for p in "${file_patterns[@]}"; do
     # A line carrying the marker below is exempt. The exemption is deliberate and
     # visible: a gate that blocks legitimate work teaches people to pass
     # --no-verify, and a gate routinely bypassed protects nothing. Requiring the
     # marker keeps each exemption written down beside the value and surfaced in
     # review, instead of argued once in a terminal nobody kept.
-    hits=$(git show ":$file" | grep -nEi "$p" | grep -v 'allow-secret' || true)
+    # ${VAR} and ${VAR:default} are the environment-placeholder form, which is the pattern
+    # people should be using — flagging it would train them to ignore the hook.
+    hits=$(git show ":$file" | grep -nEi "$p" | grep -v 'allow-secret' | grep -v '\${' || true)
     if [ -n "$hits" ]; then
       echo "BLOCKED  possible secret in $file  (pattern: $p)"
       echo "$hits" | head -3 | sed 's/^/         /'

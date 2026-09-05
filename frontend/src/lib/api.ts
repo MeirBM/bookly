@@ -37,9 +37,28 @@ export type Business = {
 
 export type UserSummary = { id: string; email: string; fullName: string };
 
+/**
+ * Exchanges a refresh token for a new pair, so rotation actually happens in the browser.
+ *
+ * <p>Set by the auth provider. Without it the client never called /api/auth/refresh at all, so it
+ * never presented a spent token — and the server's reuse detection, which only fires when a rotated
+ * token is replayed, could never trigger for a real user. A thief could rotate at leisure and stay
+ * undetected, because detection depends on the victim eventually burning the token first.
+ */
+let refreshHandler: (() => Promise<string | null>) | null = null;
+
+export function setRefreshHandler(handler: (() => Promise<string | null>) | null) {
+  refreshHandler = handler;
+}
+
 async function request<T>(
   path: string,
-  options: { method?: string; body?: unknown; accessToken?: string } = {},
+  options: {
+    method?: string;
+    body?: unknown;
+    accessToken?: string;
+    retryOn401?: boolean;
+  } = {},
 ): Promise<T> {
   const response = await fetch(`${BASE_URL}${path}`, {
     method: options.method ?? "GET",
@@ -51,6 +70,20 @@ async function request<T>(
     },
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
+
+  // An expired access token is the ordinary case, not an error: rotate once and retry.
+  // Guarded by retryOn401 so a failed refresh cannot recurse.
+  if (
+    response.status === 401 &&
+    options.accessToken &&
+    options.retryOn401 !== false &&
+    refreshHandler
+  ) {
+    const renewed = await refreshHandler();
+    if (renewed) {
+      return request<T>(path, { ...options, accessToken: renewed, retryOn401: false });
+    }
+  }
 
   if (!response.ok) {
     // A non-JSON error body means something upstream of the application failed;

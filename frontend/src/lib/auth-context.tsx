@@ -1,7 +1,14 @@
 "use client";
 
-import { createContext, useCallback, useContext, useMemo, useSyncExternalStore } from "react";
-import { api, type TokenPair } from "./api";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useSyncExternalStore,
+} from "react";
+import { api, setRefreshHandler, type TokenPair } from "./api";
 
 /**
  * Session state for the browser.
@@ -9,9 +16,15 @@ import { api, type TokenPair } from "./api";
  * <p>Tokens are held in localStorage so a reload does not log the user out. That places them within
  * reach of any script running on this origin, which is a real trade-off: an httpOnly cookie would
  * resist XSS better, but it would also make the API browser-shaped, and the same endpoints have to
- * serve the Android and iOS clients that come later. The mitigations that matter are enforced on
- * the server — a short access-token lifetime, and refresh rotation with reuse detection. Recorded
- * in the turn-1 audit as an accepted limitation rather than an oversight.
+ * serve the Android and iOS clients that come later.
+ *
+ * <p>Be precise about what that costs, because the first version of this comment was not. Both
+ * tokens live under one key, so a single script read yields both — the 15-minute access-token
+ * lifetime bounds nothing an attacker gains. What remains is refresh rotation with reuse detection,
+ * and that only works if this client actually rotates, which is why {@link setRefreshHandler} is
+ * wired below: without it the browser never presented a spent token and detection could never fire.
+ * The refresh lifetime is seven days rather than thirty for the same reason. Recorded in the turn-1
+ * audit as an accepted limitation, with the residual risk stated rather than waved at.
  *
  * <p>Read through {@link useSyncExternalStore} rather than an effect. localStorage is genuinely
  * external state that server rendering cannot see, and this is the API React provides for exactly
@@ -91,6 +104,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (current) {
       void api.logout(current.refreshToken).catch(() => undefined);
     }
+  }, []);
+
+  // Rotation on a 401, so the server's reuse detection has something to detect.
+  useEffect(() => {
+    setRefreshHandler(async () => {
+      const current = readTokens();
+      if (!current) {
+        return null;
+      }
+      try {
+        const renewed = await api.refresh(current.refreshToken);
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(renewed));
+        notify();
+        return renewed.accessToken;
+      } catch {
+        // The refresh token is spent, expired, or its family was revoked because someone
+        // replayed it. Either way this session is over; show the login screen.
+        window.localStorage.removeItem(STORAGE_KEY);
+        notify();
+        return null;
+      }
+    });
+    return () => setRefreshHandler(null);
   }, []);
 
   const value = useMemo(
