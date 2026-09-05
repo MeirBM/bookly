@@ -5,6 +5,7 @@ import com.bookly.service.dto.ServiceRequests.CreateService;
 import com.bookly.service.dto.ServiceRequests.ServiceResponse;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -13,13 +14,20 @@ import org.springframework.transaction.annotation.Transactional;
 public class ServiceCatalog {
 
     private final ServiceOfferingRepository repository;
+    private final int maxPerBusiness;
 
-    public ServiceCatalog(ServiceOfferingRepository repository) {
+    public ServiceCatalog(ServiceOfferingRepository repository,
+                          @Value("${bookly.limits.services-per-business:200}") int maxPerBusiness) {
         this.repository = repository;
+        this.maxPerBusiness = maxPerBusiness;
     }
 
     @Transactional
     public ServiceResponse create(UUID businessId, CreateService request) {
+        if (repository.countByBusinessId(businessId) >= maxPerBusiness) {
+            throw ApiException.limitReached("SERVICE_LIMIT_REACHED",
+                    "This business has reached its limit of services.");
+        }
         String name = request.name().trim();
         if (repository.existsByBusinessIdAndName(businessId, name)) {
             throw ApiException.conflict("SERVICE_NAME_TAKEN",

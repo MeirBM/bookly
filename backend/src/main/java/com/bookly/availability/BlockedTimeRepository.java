@@ -14,6 +14,8 @@ public interface BlockedTimeRepository extends JpaRepository<BlockedTime, UUID> 
 
     Optional<BlockedTime> findByIdAndBusinessId(UUID id, UUID businessId);
 
+    long countByBusinessId(UUID businessId);
+
     /**
      * Everything blocking one employee in a window: their own entries plus the business-wide ones.
      *

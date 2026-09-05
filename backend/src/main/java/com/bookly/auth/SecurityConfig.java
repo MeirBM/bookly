@@ -120,11 +120,13 @@ public class SecurityConfig {
     @Bean
     public AccessDeniedHandler accessDeniedHandler(ObjectMapper mapper) {
         return (request, response, exception) -> {
-            ApiException denied = ApiException.noBusinessAccess();
-            response.setStatus(denied.getStatus().value());
+            // Generic, because this handler covers every authorization rule, not only the tenant
+            // one. Labelling a refused /v3/api-docs request BUSINESS_ACCESS_DENIED told a client
+            // to branch on a code that had nothing to do with what it asked for.
+            response.setStatus(HttpStatus.FORBIDDEN.value());
             response.setContentType(MediaType.APPLICATION_JSON_VALUE);
             mapper.writeValue(response.getOutputStream(),
-                    ApiError.of(denied.getCode(), denied.getMessage()));
+                    ApiError.of("ACCESS_DENIED", "You do not have access to this resource."));
         };
     }
 

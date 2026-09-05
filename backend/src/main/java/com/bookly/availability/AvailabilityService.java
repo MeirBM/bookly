@@ -38,6 +38,9 @@ public class AvailabilityService {
     private final BlockedTimeRepository blockedTimes;
     private final Duration step;
 
+    private static final int MIN_YEAR = 1970;
+    private static final int MAX_YEAR = 2100;
+
     public AvailabilityService(BusinessRepository businesses,
                                EmployeeRepository employees,
                                ServiceCatalog serviceCatalog,
@@ -53,12 +56,29 @@ public class AvailabilityService {
     }
 
     /**
+     * Refuses a date far outside any plausible booking horizon.
+     *
+     * <p>{@code ISO_DATE} accepts expanded years, so {@code +999999999-12-31} parses, reaches this
+     * service, and throws from {@code plusDays(1)} — past the malformed-request handlers, into the
+     * catch-all, and out as 500 with a stack trace written per request. A 400 belongs there, and
+     * bounding the range also bounds what a caller can ask this endpoint to compute once turn 3
+     * exposes it publicly.
+     */
+    private static void requireSaneDate(LocalDate date) {
+        if (date.getYear() < MIN_YEAR || date.getYear() > MAX_YEAR) {
+            throw ApiException.badRequest("DATE_OUT_OF_RANGE",
+                    "That date is outside the range this calendar covers.");
+        }
+    }
+
+    /**
      * @param employeeId null means "any available employee" — the union across everyone who can
      *                   perform the service, deduplicated by start instant
      */
     @Transactional(readOnly = true)
     public AvailabilityResponse availableOn(UUID businessId, UUID serviceId, UUID employeeId,
                                             LocalDate date) {
+        requireSaneDate(date);
         Business business = businesses.findById(businessId)
                 .orElseThrow(ApiException::noBusinessAccess);
         ZoneId zone = ZoneId.of(business.getTimezone());

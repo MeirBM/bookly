@@ -26,6 +26,18 @@ public class ApiException extends RuntimeException {
         return new ApiException(HttpStatus.CONFLICT, code, message);
     }
 
+    /**
+     * Refuses a write that would take a business past a configured row limit.
+     *
+     * <p>409 rather than 400: the request is well formed, and the same request would have
+     * succeeded earlier. The limits exist because every one of these rows makes an availability
+     * computation more expensive, so an account creating them without bound is an account making
+     * every later read slower for everyone.
+     */
+    public static ApiException limitReached(String code, String message) {
+        return new ApiException(HttpStatus.CONFLICT, code, message);
+    }
+
     public static ApiException badRequest(String code, String message) {
         return new ApiException(HttpStatus.BAD_REQUEST, code, message);
     }

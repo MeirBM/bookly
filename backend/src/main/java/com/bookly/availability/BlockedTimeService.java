@@ -6,6 +6,7 @@ import com.bookly.common.error.ApiException;
 import com.bookly.employee.EmployeeDirectory;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,13 +16,22 @@ public class BlockedTimeService {
     private final BlockedTimeRepository repository;
     private final EmployeeDirectory employees;
 
-    public BlockedTimeService(BlockedTimeRepository repository, EmployeeDirectory employees) {
+    private final int maxPerBusiness;
+
+    public BlockedTimeService(BlockedTimeRepository repository, EmployeeDirectory employees,
+                              @Value("${bookly.limits.blocked-times-per-business:2000}")
+                              int maxPerBusiness) {
         this.repository = repository;
         this.employees = employees;
+        this.maxPerBusiness = maxPerBusiness;
     }
 
     @Transactional
     public BlockedTimeResponse create(UUID businessId, CreateBlockedTime request) {
+        if (repository.countByBusinessId(businessId) >= maxPerBusiness) {
+            throw ApiException.limitReached("BLOCKED_TIME_LIMIT_REACHED",
+                    "This business has reached its limit of blocked periods.");
+        }
         if (!request.endsAt().isAfter(request.startsAt())) {
             throw ApiException.badRequest("INVALID_BLOCKED_WINDOW",
                     "A blocked period must end after it starts.");

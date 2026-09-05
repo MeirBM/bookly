@@ -1,6 +1,7 @@
 package com.bookly.availability.dto;
 
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -31,7 +32,9 @@ public final class AvailabilityDtos {
             UUID employeeId,
             @NotNull Instant startsAt,
             @NotNull Instant endsAt,
-            String reason) {
+            // Capped because this lands in a TEXT column and is read back on every dashboard
+            // load. It was the one string in this turn without a bound.
+            @Size(max = 500) String reason) {
     }
 
     public record BlockedTimeResponse(UUID id, UUID employeeId, Instant startsAt, Instant endsAt,

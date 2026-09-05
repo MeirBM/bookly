@@ -14,4 +14,6 @@ public interface WorkingHoursRepository extends JpaRepository<WorkingHours, UUID
             UUID businessId, UUID employeeId, short weekday);
 
     Optional<WorkingHours> findByIdAndBusinessId(UUID id, UUID businessId);
+
+    long countByBusinessIdAndEmployeeId(UUID businessId, UUID employeeId);
 }

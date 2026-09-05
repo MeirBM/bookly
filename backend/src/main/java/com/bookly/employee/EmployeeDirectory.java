@@ -14,6 +14,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,16 +25,28 @@ public class EmployeeDirectory {
     private final ServiceOfferingRepository services;
     private final WorkingHoursRepository workingHours;
 
+    private final int maxEmployees;
+    private final int maxWindowsPerEmployee;
+
     public EmployeeDirectory(EmployeeRepository employees,
                              ServiceOfferingRepository services,
-                             WorkingHoursRepository workingHours) {
+                             WorkingHoursRepository workingHours,
+                             @Value("${bookly.limits.employees-per-business:200}") int maxEmployees,
+                             @Value("${bookly.limits.working-hours-per-employee:100}")
+                             int maxWindowsPerEmployee) {
         this.employees = employees;
         this.services = services;
         this.workingHours = workingHours;
+        this.maxEmployees = maxEmployees;
+        this.maxWindowsPerEmployee = maxWindowsPerEmployee;
     }
 
     @Transactional
     public EmployeeResponse create(UUID businessId, CreateEmployee request) {
+        if (employees.countByBusinessId(businessId) >= maxEmployees) {
+            throw ApiException.limitReached("EMPLOYEE_LIMIT_REACHED",
+                    "This business has reached its limit of employees.");
+        }
         Employee saved = employees.save(new Employee(businessId, request.fullName().trim()));
         return toResponse(saved);
     }
@@ -81,6 +94,11 @@ public class EmployeeDirectory {
     public WorkingHoursResponse addWorkingHours(UUID businessId, UUID employeeId,
                                                 CreateWorkingHours request) {
         require(businessId, employeeId);
+        if (workingHours.countByBusinessIdAndEmployeeId(businessId, employeeId)
+                >= maxWindowsPerEmployee) {
+            throw ApiException.limitReached("WORKING_HOURS_LIMIT_REACHED",
+                    "This employee has reached its limit of working windows.");
+        }
         if (!request.endsAt().isAfter(request.startsAt())) {
             throw ApiException.badRequest("INVALID_WORKING_WINDOW",
                     "A working window must end after it starts.");

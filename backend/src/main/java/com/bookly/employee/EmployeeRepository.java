@@ -13,6 +13,8 @@ public interface EmployeeRepository extends JpaRepository<Employee, UUID> {
 
     Optional<Employee> findByIdAndBusinessId(UUID id, UUID businessId);
 
+    long countByBusinessId(UUID businessId);
+
     /**
      * The employees who can actually perform a service.
      *

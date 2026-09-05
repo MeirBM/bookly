@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.bookly.support.ApiIntegrationTest;
 import com.fasterxml.jackson.databind.JsonNode;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -170,5 +171,76 @@ class AvailabilityIT extends ApiIntegrationTest {
         assertThat(employeeIdsIn(afternoon))
                 .as("an hour only one employee is free must name only that one")
                 .containsExactly(allDay);
+    }
+
+    /**
+     * 2.27 — the response states the step it was computed on, and the slots it returns are the grid
+     * that step describes.
+     *
+     * <p>Stating the number is the easy half and proving it is the half that matters: a response
+     * that declared a step its slots did not follow would mislead a client more thoroughly than one
+     * that said nothing. So the step is read from the response and every returned start is then
+     * checked against it, rather than the test assuming a step of its own.
+     */
+    @Test
+    @DisplayName("2.27 the response states the step, and the slots follow it")
+    void responseStatesTheStep() {
+        Account owner = newAccount("avail-step");
+        ZoneId zone = ZoneId.of("Asia/Jerusalem");
+        String businessId = newBusiness(owner, "Grid Salon", zone.getId()).path("id").asText();
+        int serviceMinutes = 60;
+        String serviceId = newService(owner, businessId, "Haircut", serviceMinutes).path("id").asText();
+        String employeeId = newEmployee(owner, businessId, "On The Grid").path("id").asText();
+        linkServices(owner, businessId, employeeId, serviceId);
+        newWorkingHours(owner, businessId, employeeId, DATE.getDayOfWeek(), LOCAL_OPEN, LOCAL_CLOSE);
+
+        ResponseEntity<String> response = availability(owner, businessId, serviceId, null, DATE);
+
+        assertThat(response.getStatusCode().value()).as("GET availability").isEqualTo(200);
+        JsonNode payload = json(response);
+        assertThat(payload.has("stepMinutes"))
+                .as("the response must state the grid it was computed on; without it a client "
+                        + "cannot tell a sparse day from a coarse step")
+                .isTrue();
+        long stepMinutes = payload.path("stepMinutes").asLong();
+        assertThat(stepMinutes).as("stepMinutes").isPositive();
+
+        Duration step = Duration.ofMinutes(stepMinutes);
+        Duration serviceDuration = Duration.ofMinutes(serviceMinutes);
+        Instant open = LocalTime.parse(LOCAL_OPEN).atDate(DATE).atZone(zone).toInstant();
+        Instant close = LocalTime.parse(LOCAL_CLOSE).atDate(DATE).atZone(zone).toInstant();
+
+        List<JsonNode> slots = slotsOf(response);
+        assertThat(slots).as("a three-hour window holds at least one one-hour service").isNotEmpty();
+
+        List<Instant> starts = slots.stream().map(s -> Instant.parse(s.path("start").asText())).toList();
+        assertThat(starts.get(0))
+                .as("the grid begins at the start of the working window")
+                .isEqualTo(open);
+        for (int i = 1; i < starts.size(); i++) {
+            assertThat(Duration.between(starts.get(i - 1), starts.get(i)))
+                    .as("consecutive starts in an uninterrupted window are exactly one step apart, "
+                            + "and the response says that step is %s", step)
+                    .isEqualTo(step);
+        }
+        for (Instant start : starts) {
+            assertThat(Duration.between(open, start).toMinutes() % stepMinutes)
+                    .as("%s is on the grid the response declares", start)
+                    .isZero();
+        }
+
+        long expectedSlots = Duration.between(open, close).minus(serviceDuration).dividedBy(step) + 1;
+        assertThat(starts.size())
+                .as("every step from %s at which a %d-minute service still finishes by %s",
+                        LOCAL_OPEN, serviceMinutes, LOCAL_CLOSE)
+                .isEqualTo((int) expectedSlots);
+
+        for (JsonNode slot : slots) {
+            assertThat(Duration.between(
+                            Instant.parse(slot.path("start").asText()),
+                            Instant.parse(slot.path("end").asText())))
+                    .as("a slot lasts as long as the service it is offered for")
+                    .isEqualTo(serviceDuration);
+        }
     }
 }
