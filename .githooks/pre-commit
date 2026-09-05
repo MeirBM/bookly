@@ -24,9 +24,16 @@ for file in $staged; do
   esac
   [ -f "$file" ] || continue
   for p in "${patterns[@]}"; do
-    if git show ":$file" | grep -nEi "$p" >/dev/null 2>&1; then
+    # A line carrying the marker below is exempt. The exemption is deliberate and
+    # visible: a gate that blocks legitimate work teaches people to pass
+    # --no-verify, and a gate routinely bypassed protects nothing. Requiring the
+    # marker keeps each exemption written down beside the value and surfaced in
+    # review, instead of argued once in a terminal nobody kept.
+    hits=$(git show ":$file" | grep -nEi "$p" | grep -v 'allow-secret' || true)
+    if [ -n "$hits" ]; then
       echo "BLOCKED  possible secret in $file  (pattern: $p)"
-      git show ":$file" | grep -nEi "$p" | head -3 | sed 's/^/         /'
+      echo "$hits" | head -3 | sed 's/^/         /'
+      echo "         if this is a test fixture, append:  // allow-secret"
       fail=1
     fi
   done
