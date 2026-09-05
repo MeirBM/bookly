@@ -117,7 +117,7 @@ drifts.
 
 | Turn | Scope | State |
 |---|---|---|
-| 1 | Foundation, authentication, tenant isolation | in progress |
+| 1 | Foundation, authentication, tenant isolation | complete — [audit](docs/audit/turn-1.md) |
 | 2 | Services, employees, working hours, availability engine | planned |
 | 3 | Booking, concurrency, public booking page, deployment | planned |
 
