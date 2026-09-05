@@ -68,13 +68,58 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-      # Criterion 1.17 asks what the browser does with client-side session state, which no
-      # backend test can decide. Turn 3 needs the same harness for the public booking flow.
+
+  # A separate job because these need the real API. The turn-2 screens are only meaningful
+  # against it - and a CORS preflight, which no backend test can see, broke every one of them
+  # while 113 backend tests stayed green.
+  e2e:
+    name: Browser — dashboard against the real API
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: bookly
+          POSTGRES_USER: bookly
+          POSTGRES_PASSWORD: bookly
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: jdbc:postgresql://localhost:5432/bookly
+      DATABASE_USER: bookly
+      DATABASE_PASSWORD: bookly
+      EXPOSE_API_DOCS: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'corretto'
+          cache: maven
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Generate a run-scoped signing key
+        # Generated rather than written down: a literal here would be a committed credential,
+        # and the application refuses to start without one.
+        run: echo "JWT_SECRET=$(openssl rand -base64 48)" >> "$GITHUB_ENV"
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
       - name: Install Playwright browser
         working-directory: frontend
         run: npx playwright install --with-deps chromium
-      - name: End-to-end tests
+      - name: Browser tests
         working-directory: frontend
+        # playwright.config.ts starts both servers and waits for the backend's health endpoint.
         run: npm run test:e2e
       - name: Publish Playwright report
         if: failure()
