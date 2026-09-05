@@ -1,0 +1,63 @@
+spring:
+  application:
+    name: bookly-backend
+
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/bookly}
+    username: ${DATABASE_USER:bookly}
+    password: ${DATABASE_PASSWORD:bookly}
+
+  jpa:
+    open-in-view: false            # an entity must not be lazily loaded from a view layer
+    hibernate:
+      ddl-auto: validate           # Flyway owns the schema; a mismatch must fail at startup
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+  jackson:
+    default-property-inclusion: non_null
+
+server:
+  error:
+    include-message: never         # error bodies are built by the advice, not by Spring's default
+    include-stacktrace: never
+    include-binding-errors: never
+
+bookly:
+  jwt:
+    # No default. The application must refuse to start rather than run on a known key.
+    secret: ${JWT_SECRET}
+    access-token-ttl: PT15M
+    refresh-token-ttl: P30D
+    issuer: bookly
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+logging:
+  level:
+    org.springframework.security: INFO

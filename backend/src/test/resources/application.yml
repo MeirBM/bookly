@@ -1,0 +1,18 @@
+# Test profile. Testcontainers supplies datasource and redis properties at runtime.
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+
+bookly:
+  jwt:
+    secret: test-only-secret-not-used-anywhere-else-0123456789abcdef
+    access-token-ttl: PT15M
+    refresh-token-ttl: P30D
+    issuer: bookly
+  security:
+    # BCrypt is deliberately slow; hashing once per test would dominate the suite.
+    # Turn-1 spec, pitfall 8. This value must never reach a non-test profile.
+    bcrypt-strength: 4
