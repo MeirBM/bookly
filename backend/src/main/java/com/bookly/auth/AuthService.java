@@ -39,6 +39,7 @@ public class AuthService {
 
     private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final RefreshTokenRevoker refreshTokenRevoker;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final JwtProperties jwtProperties;
@@ -47,12 +48,14 @@ public class AuthService {
 
     public AuthService(UserRepository userRepository,
                        RefreshTokenRepository refreshTokenRepository,
+                       RefreshTokenRevoker refreshTokenRevoker,
                        PasswordEncoder passwordEncoder,
                        JwtService jwtService,
                        JwtProperties jwtProperties,
                        Clock clock) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
+        this.refreshTokenRevoker = refreshTokenRevoker;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
         this.jwtProperties = jwtProperties;
@@ -108,7 +111,9 @@ public class AuthService {
                 .orElseThrow(ApiException::invalidRefreshToken);
 
         if (stored.isRevoked()) {
-            int revoked = refreshTokenRepository.revokeFamily(stored.getFamilyId(), now);
+            // Committed in its own transaction: the throw below would otherwise roll the
+            // revocation back, leaving the stolen token's replacement working.
+            int revoked = refreshTokenRevoker.revokeFamily(stored.getFamilyId(), now);
             log.warn("Refresh token reuse detected for user {}; revoked {} tokens in family {}",
                     stored.getUserId(), revoked, stored.getFamilyId());
             throw ApiException.invalidRefreshToken();
@@ -126,7 +131,7 @@ public class AuthService {
     @Transactional
     public void logout(String presentedToken) {
         refreshTokenRepository.findByTokenHash(hash(presentedToken)).ifPresent(
-                token -> refreshTokenRepository.revokeFamily(token.getFamilyId(), clock.instant()));
+                token -> refreshTokenRevoker.revokeFamily(token.getFamilyId(), clock.instant()));
     }
 
     private TokenPairResponse issueTokenPair(User user, UUID familyId) {
