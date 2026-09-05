@@ -8,6 +8,8 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
+import org.assertj.core.api.SoftAssertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
@@ -257,5 +259,148 @@ class BusinessConfigurationIT extends ApiIntegrationTest {
         Integer linkRowsToDoomed = jdbc().queryForObject(
                 "select count(*) from employee_services where service_id = ?::uuid", Integer.class, doomed);
         assertThat(linkRowsToDoomed).as("link rows left behind by the delete").isZero();
+    }
+
+    // -------------------------------------------------------------------- 2.29
+
+    /**
+     * 2.29 — a duplicate working window is refused.
+     *
+     * <p>Twenty thousand copies of "Monday 09:00-17:00" are twenty thousand rows the availability
+     * request has to consider, and a caller could create them through the ordinary API. The engine
+     * merges before stepping so the cost is bounded either way, but the rows should not accumulate
+     * in the first place.
+     */
+    @Test
+    @DisplayName("2.29 an identical working window is refused rather than stored twice")
+    void refusesDuplicateWorkingWindow() {
+        Fixture f = aBusiness("dupwindow");
+        String employeeId = newEmployee(f.owner(), f.businessId(), "Repeated Rota").path("id").asText();
+        String suffix = "/employees/" + employeeId + "/working-hours";
+        Object window = body("weekday", "MONDAY", "startsAt", "09:00:00", "endsAt", "17:00:00");
+
+        assertThat(post(businessPath(f.businessId(), suffix), window, f.owner().accessToken())
+                        .getStatusCode()
+                        .value())
+                .as("the first window is stored")
+                .isEqualTo(201);
+
+        ResponseEntity<String> duplicate =
+                post(businessPath(f.businessId(), suffix), window, f.owner().accessToken());
+
+        assertThat(duplicate.getStatusCode().value())
+                .as("the identical window must be refused as the caller's mistake, not stored and "
+                        + "not answered with a server error")
+                .isBetween(400, 499);
+        assertThat(String.valueOf(duplicate.getBody()))
+                .as("the refusal must not leak the constraint that produced it")
+                .doesNotContain("\tat ", ".java:", "Exception", "working_hours_no_duplicate_window");
+        assertThat(list(f, suffix)).as("exactly one window is stored").hasSize(1);
+
+        // A different window for the same day is not a duplicate and must still be accepted:
+        // a split shift is two windows on one weekday, which is how a break is expressed.
+        assertThat(post(businessPath(f.businessId(), suffix),
+                                body("weekday", "MONDAY", "startsAt", "18:00:00", "endsAt", "20:00:00"),
+                                f.owner().accessToken())
+                        .getStatusCode()
+                        .value())
+                .as("a second, different window on the same weekday is a split shift, not a duplicate")
+                .isEqualTo(201);
+        assertThat(list(f, suffix)).hasSize(2);
+    }
+
+    /**
+     * 2.29 — each table has a per-business row cap, and reaching it is answered 409 with a code the
+     * caller can act on rather than a generic failure.
+     *
+     * <p>The rows below the cap are inserted directly. The cap is what is under test, not the
+     * endpoint's ability to be called two thousand times, and a test that spent a minute proving
+     * the latter would be a test people start skipping.
+     */
+    @Test
+    @DisplayName("2.29 each table refuses rows past its per-business cap with 409")
+    void refusesRowsPastTheLimit() {
+        record Table(String what, int cap, String suffix, java.util.function.Supplier<Object> payload) {}
+
+        Fixture f = aBusiness("caps");
+        String employeeId = newEmployee(f.owner(), f.businessId(), "Capped Rota").path("id").asText();
+
+        // Fill each table to one row below its cap, counting what is already there rather than
+        // assuming it is empty — the fixture above has already created an employee.
+        fill("insert into services (business_id, name, duration_minutes) "
+                        + "select ?::uuid, 'Bulk service ' || i, 30 from generate_series(1, ?) i",
+                f.businessId(),
+                199 - rowCount("services", "business_id", f.businessId()));
+        fill("insert into employees (business_id, full_name) "
+                        + "select ?::uuid, 'Bulk employee ' || i from generate_series(1, ?) i",
+                f.businessId(),
+                199 - rowCount("employees", "business_id", f.businessId()));
+        fill("insert into working_hours (business_id, employee_id, weekday, start_local, end_local) "
+                        + "select ?::uuid, '" + employeeId + "'::uuid, 1, "
+                        + "  time '00:00' + (i || ' minutes')::interval, "
+                        + "  time '00:00' + ((i + 1) || ' minutes')::interval "
+                        + "from generate_series(1, ?) i",
+                f.businessId(),
+                99 - rowCount("working_hours", "employee_id", employeeId));
+        fill("insert into blocked_times (business_id, starts_at, ends_at) "
+                        + "select ?::uuid, now() + (i || ' hours')::interval, "
+                        + "  now() + ((i + 1) || ' hours')::interval "
+                        + "from generate_series(1, ?) i",
+                f.businessId(),
+                1999 - rowCount("blocked_times", "business_id", f.businessId()));
+
+        List<Table> tables = List.of(
+                new Table("services", 200, "/services",
+                        () -> body("name", "One more " + UUID.randomUUID(), "durationMinutes", 30, "priceMinor", 1L)),
+                new Table("employees", 200, "/employees",
+                        () -> body("fullName", "One more " + UUID.randomUUID())),
+                new Table("working hours", 100, "/employees/" + employeeId + "/working-hours",
+                        () -> body("weekday", "SUNDAY", "startsAt", "22:00:00", "endsAt", "23:00:00")),
+                new Table("blocked times", 2000, "/blocked-times",
+                        () -> body("startsAt", "2030-01-01T00:00:00Z", "endsAt", "2030-01-01T01:00:00Z")));
+
+        SoftAssertions soft = new SoftAssertions();
+        for (Table table : tables) {
+            // One below the cap: the row that reaches it is still accepted.
+            ResponseEntity<String> lastAllowed =
+                    post(businessPath(f.businessId(), table.suffix()), table.payload().get(), f.owner().accessToken());
+            soft.assertThat(lastAllowed.getStatusCode().value())
+                    .as("%s: the row that reaches the cap of %d is still the caller's to create",
+                            table.what(), table.cap())
+                    .isEqualTo(201);
+
+            ResponseEntity<String> pastTheCap =
+                    post(businessPath(f.businessId(), table.suffix()), table.payload().get(), f.owner().accessToken());
+            soft.assertThat(pastTheCap.getStatusCode().value())
+                    .as("%s: the row past the cap of %d is refused", table.what(), table.cap())
+                    .isEqualTo(409);
+            soft.assertThat(json(pastTheCap).path("code").asText())
+                    .as("%s: a caller who hits a limit needs to know it was a limit, not a mystery",
+                            table.what())
+                    .endsWith("_LIMIT_REACHED");
+        }
+        soft.assertAll();
+
+        // Another business is unaffected: the cap is per business, not global.
+        Fixture other = aBusiness("caps-other");
+        assertThat(post(businessPath(other.businessId(), "/services"),
+                                body("name", "Unaffected", "durationMinutes", 30, "priceMinor", 1L),
+                                other.owner().accessToken())
+                        .getStatusCode()
+                        .value())
+                .as("one business filling its quota must not stop another from working")
+                .isEqualTo(201);
+    }
+
+    private void fill(String sql, String businessId, int rows) {
+        if (rows > 0) {
+            jdbc().update(sql, businessId, rows);
+        }
+    }
+
+    private int rowCount(String table, String column, String id) {
+        Integer count = jdbc().queryForObject(
+                "select count(*) from " + table + " where " + column + " = ?::uuid", Integer.class, id);
+        return count == null ? 0 : count;
     }
 }

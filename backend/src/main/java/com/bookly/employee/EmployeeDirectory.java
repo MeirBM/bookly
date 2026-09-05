@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -103,9 +104,17 @@ public class EmployeeDirectory {
             throw ApiException.badRequest("INVALID_WORKING_WINDOW",
                     "A working window must end after it starts.");
         }
-        WorkingHours saved = workingHours.save(new WorkingHours(
-                businessId, employeeId, request.weekday(), request.startsAt(), request.endsAt()));
-        return toResponse(saved);
+        try {
+            return toResponse(workingHours.saveAndFlush(new WorkingHours(
+                    businessId, employeeId, request.weekday(),
+                    request.startsAt(), request.endsAt())));
+        } catch (DataIntegrityViolationException ex) {
+            // The unique constraint added in V4 was doing its job and nobody was catching it, so
+            // a duplicate window answered 500 with a stack trace per attempt - the constraint
+            // refused the row and the caller was told the server had broken.
+            throw ApiException.conflict("WORKING_HOURS_DUPLICATE",
+                    "That working window already exists for this employee.");
+        }
     }
 
     @Transactional(readOnly = true)

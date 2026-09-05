@@ -9,13 +9,18 @@ import com.fasterxml.jackson.databind.JsonNode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import com.bookly.support.Routes;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.assertj.core.api.SoftAssertions;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 import org.springframework.test.context.TestPropertySource;
 
 /**
@@ -39,6 +44,7 @@ import org.springframework.test.context.TestPropertySource;
  */
 @TestPropertySource(properties = {
     "bookly.security.rate-limit.max-requests=" + AuthRateLimitIT.MAX_REQUESTS,
+    "bookly.security.rate-limit.api-max-requests=" + AuthRateLimitIT.MAX_REQUESTS,
     "bookly.security.rate-limit.window=PT1M"
 })
 class AuthRateLimitIT extends ApiIntegrationTest {
@@ -47,6 +53,10 @@ class AuthRateLimitIT extends ApiIntegrationTest {
 
     @Autowired
     private RedisConnectionFactory redis;
+
+    @Autowired
+    @Qualifier("requestMappingHandlerMapping")
+    private RequestMappingHandlerMapping handlerMapping;
 
     @BeforeEach
     void startWithEmptyCounters() {
@@ -132,5 +142,48 @@ class AuthRateLimitIT extends ApiIntegrationTest {
                     .doesNotContain(email.toLowerCase(Locale.ROOT))
                     .doesNotContain(localPart.toLowerCase(Locale.ROOT));
         }
+    }
+
+    /**
+     * 2.30 — every {@code /api} route is rate limited, not only {@code /api/auth}.
+     *
+     * <p>Limiting the login endpoints alone leaves everything this turn added unbounded: an
+     * authenticated caller could drive the availability engine as fast as the network allows, and
+     * that is the expensive route, not login. The set is read from the route table rather than
+     * listed here, so a route added later is covered without anyone remembering to add it.
+     */
+    @Test
+    @DisplayName("2.30 every /api route is rate limited, not only /api/auth")
+    void everyApiRouteIsRateLimited() {
+        Account owner = newAccount("api-limit");
+        String businessId = newBusiness(owner, "Limited Salon", "Asia/Jerusalem").path("id").asText();
+
+        // Spend the budget on one route; the limiter counts the caller, not the endpoint.
+        int attempts = 0;
+        while (attempts < 50
+                && get("/api/businesses", owner.accessToken()).getStatusCode().value() != 429) {
+            attempts++;
+        }
+        assertThat(attempts)
+                .as("GET /api/businesses must become rate limited; after %d requests it had not, "
+                        + "so the limiter does not reach the routes this turn added", attempts)
+                .isLessThan(50);
+
+        List<Routes.Route> routes = Routes.requiringIsolationCoverage(handlerMapping);
+        assertThat(routes).as("routes under /api that are not the public auth endpoints").isNotEmpty();
+
+        SoftAssertions soft = new SoftAssertions();
+        for (Routes.Route route : routes) {
+            String path = Routes.fill(route.pattern(), businessId);
+            Object requestBody = route.method() == HttpMethod.GET ? null : body();
+            ResponseEntity<String> response =
+                    send(route.method(), path, requestBody, owner.accessToken());
+
+            soft.assertThat(response.getStatusCode().value())
+                    .as("%s once the caller is over the limit; an unlimited route is the one an "
+                            + "attacker will find", route)
+                    .isEqualTo(429);
+        }
+        soft.assertAll();
     }
 }

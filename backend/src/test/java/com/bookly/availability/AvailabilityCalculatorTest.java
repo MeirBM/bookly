@@ -428,4 +428,62 @@ class AvailabilityCalculatorTest {
                     .isAfterOrEqualTo(gap.getDateTimeAfter().toLocalTime());
         }
     }
+
+    // ------------------------------------------------------------------ 2.29
+
+    /**
+     * 2.29 — overlapping windows and busy periods are merged before stepping, so no single request
+     * can be made arbitrarily expensive by rows a caller creates.
+     *
+     * <p>The rows here are ones an owner could create through the ordinary API: twenty thousand
+     * copies of one working window and twenty thousand overlapping blocks. Compared pairwise that
+     * is on the order of 10^10 comparisons inside a single request, which no rate limit helps with
+     * — the cost sits inside one request that the caller is entitled to make.
+     *
+     * <p>Two things are asserted, and the first matters more than the second: the answer must be
+     * the same as for the one window and one block these all collapse to. A merge that changed the
+     * result would be a correctness bug wearing a performance fix. The time bound is deliberately
+     * far above any plausible honest runtime, so it fails only on a cost that has gone quadratic,
+     * never on a slow machine.
+     */
+    @Test
+    @DisplayName("2.29 duplicated windows and blocks are merged, not compared pairwise")
+    void mergesOverlappingWindowsAndBusyPeriodsBeforeStepping() {
+        int copies = 20_000;
+        List<WorkingWindow> windows = new java.util.ArrayList<>();
+        List<BusyInterval> busy = new java.util.ArrayList<>();
+        Instant blockStart = instantAt(ORDINARY_DAY, "10:00");
+        for (int i = 0; i < copies; i++) {
+            windows.add(window("09:00", "17:00"));
+            // Overlapping rather than identical, but with a common end, so the union is exactly
+            // the hour 10:00-11:00 and the expected answer can be worked out on paper.
+            busy.add(new BusyInterval(blockStart.plusSeconds(i % 60), blockStart.plusSeconds(3600)));
+        }
+
+        long startedAt = System.nanoTime();
+        List<Instant> many = startTimes(
+                ORDINARY_DAY, windows, busy, Duration.ofMinutes(60), Duration.ofMinutes(60));
+        Duration elapsed = Duration.ofNanos(System.nanoTime() - startedAt);
+
+        List<Instant> one = startTimes(
+                ORDINARY_DAY,
+                List.of(window("09:00", "17:00")),
+                List.of(new BusyInterval(blockStart, blockStart.plusSeconds(3600))),
+                Duration.ofMinutes(60),
+                Duration.ofMinutes(60));
+
+        assertThat(many)
+                .as("%d copies of one window and %d overlapping blocks describe the same day as the "
+                        + "one window and one block they collapse to", copies, copies)
+                .isEqualTo(one);
+        assertThat(localTimesOf(many))
+                .as("the busy hour is excluded exactly once")
+                .containsExactlyElementsOf(
+                        times("09:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00"));
+        assertThat(elapsed)
+                .as("computing one day from %d rows took %s; pairwise comparison of these rows is "
+                        + "around 10^10 operations, so this bound is only reachable by merging",
+                        copies, elapsed)
+                .isLessThan(Duration.ofSeconds(5));
+    }
 }

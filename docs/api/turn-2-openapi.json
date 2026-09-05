@@ -494,6 +494,16 @@
                                 }
                             }
                         }
+                    },
+                    "409": {
+                        "description": "An identical window exists, or the employee's limit is reached",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/WorkingHoursResponse"
+                                }
+                            }
+                        }
                     }
                 },
                 "security": [
@@ -1252,7 +1262,9 @@
                         "format": "date-time"
                     },
                     "reason": {
-                        "type": "string"
+                        "type": "string",
+                        "maxLength": 500,
+                        "minLength": 0
                     }
                 },
                 "required": [

@@ -82,7 +82,9 @@ public class EmployeeController {
             @ApiResponse(responseCode = "201", description = "Created"),
             @ApiResponse(responseCode = "400", description = "The window does not end after it starts"),
             @ApiResponse(responseCode = "403", description = "Not a member of this business"),
-            @ApiResponse(responseCode = "404", description = "No such employee here")})
+            @ApiResponse(responseCode = "404", description = "No such employee here"),
+            @ApiResponse(responseCode = "409",
+                    description = "An identical window exists, or the employee's limit is reached")})
     public ResponseEntity<WorkingHoursResponse> addWorkingHours(
             @PathVariable UUID businessId,
             @PathVariable UUID employeeId,

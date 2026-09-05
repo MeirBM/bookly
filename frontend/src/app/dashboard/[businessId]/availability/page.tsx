@@ -58,7 +58,24 @@ export default function AvailabilityPage({
     <div className="flex flex-col gap-6">
       <h1 className="text-2xl font-semibold">Availability</h1>
 
-      {services.data && services.data.length === 0 ? (
+      {services.isPending ? (
+        <p className="py-6 text-slate-600" role="status">
+          Loading services…
+        </p>
+      ) : services.isError ? (
+        // Without this the screen sat on "Loading availability…" for ever when the service list
+        // failed: the availability query stays disabled with no service to ask about, so its own
+        // error state never fires. A permanent loading state is the loading state wearing the
+        // error's job, and a failure has to look like a failure.
+        <div role="alert">
+          <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-800">
+            Could not load services, so availability cannot be worked out.
+          </p>
+          <button className="mt-2 text-sm underline" type="button" onClick={() => services.refetch()}>
+            Try again
+          </button>
+        </div>
+      ) : services.data.length === 0 ? (
         <p className="rounded-md border border-dashed border-slate-300 p-6 text-slate-600">
           Add a service before checking availability — how long a service takes is what decides
           which times can be offered.

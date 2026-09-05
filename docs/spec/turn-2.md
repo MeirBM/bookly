@@ -71,7 +71,7 @@ Each resolves to one true/false answer and names the test that decides it.
 | 2.26 | The status code the OpenAPI document declares for an operation is the status that operation actually returns: creates declare 201, deletes declare 204 | `OpenApiIT.documentedStatusCodesMatchReality` |
 | 2.27 | The availability response states the step it was computed on, so a client knows what grid it received | `AvailabilityIT.responseStatesTheStep` |
 | 2.28 | The API answers a cross-origin preflight from the dashboard's configured origin, and refuses one from any other origin | `dashboard.spec.ts`, `CorsContractIT` |
-| 2.29 | No single request can be made arbitrarily expensive by rows a caller creates: duplicate working windows are refused, overlapping windows and busy periods are merged before stepping, and each table has a per-business row cap | `AvailabilityCalculatorTest`, `BusinessConfigurationIT.refusesDuplicateWorkingWindow`, `.refusesRowsPastTheLimit` |
+| 2.29 | No single request can be made arbitrarily expensive by rows a caller creates: duplicate working windows are refused with **409**, overlapping windows and busy periods are merged before stepping, and each table has a per-business row cap | `AvailabilityCalculatorTest`, `BusinessConfigurationIT.refusesDuplicateWorkingWindow`, `.refusesRowsPastTheLimit` |
 | 2.30 | Every `/api` route is rate limited, not only `/api/auth` | `AuthRateLimitIT` |
 
 ### Interface
