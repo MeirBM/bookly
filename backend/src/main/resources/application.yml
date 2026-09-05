@@ -38,6 +38,11 @@ server:
     include-binding-errors: never
 
 bookly:
+  cors:
+    # Explicit origins, never a wildcard: the frontend and the API are separate services, so
+    # this is required for the product to work at all, and "*" would let any site script it.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
+
   # Every row here makes an availability computation more expensive, so unbounded writes are
   # a way to make every later read slower for everyone. Generous for a real business,
   # nowhere near enough to be a denial-of-service primitive.

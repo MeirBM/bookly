@@ -23,14 +23,43 @@ export default defineConfig({
     trace: "on-first-retry",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
-  webServer: {
-    // next start does not work with output: "standalone" - it warns and serves something
-    // other than what ships. Running the standalone server, with the static assets copied
-    // beside it exactly as the Dockerfile does, means these tests exercise the deployed
-    // artifact rather than a development approximation of it.
-    command: "npm run build:standalone && node .next/standalone/server.js",
-    url: "http://localhost:3000",
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-  },
+  // Two servers, because the turn-2 screens are only meaningful against a real API: the
+  // dashboard's states are what the backend actually answers, and a mocked one would assert
+  // that our fixtures match our fixtures.
+  webServer: [
+    {
+      // Requires DATABASE_URL, DATABASE_USER, DATABASE_PASSWORD and JWT_SECRET in the
+      // environment, and Postgres and Redis reachable - `docker compose up -d postgres redis`.
+      // reuseExistingServer means a backend already running is used as-is.
+      command: "cd ../backend && ./mvnw -q -DskipTests spring-boot:run",
+      url: "http://localhost:8080/actuator/health",
+      reuseExistingServer: true,
+      timeout: 180_000,
+      stdout: "ignore",
+      stderr: "pipe",
+      env: {
+        // Every test seeds its own account, and four workers do it at once, so the production
+        // auth limit of 20/minute refuses the setup rather than anything under test. Raised
+        // here for the same reason the test profile raises it: the limiter's own behaviour is
+        // verified by AuthRateLimitIT against its own deliberately low limit, so this weakens
+        // no gate — it stops one control from masking every other assertion.
+        BOOKLY_SECURITY_RATELIMIT_MAXREQUESTS: "100000",
+        BOOKLY_SECURITY_RATELIMIT_APIMAXREQUESTS: "100000",
+      },
+    },
+    {
+      // next start does not work with output: "standalone" - it warns and serves something
+      // other than what ships. Running the standalone server, with the static assets copied
+      // beside it exactly as the Dockerfile does, means these tests exercise the deployed
+      // artifact rather than a development approximation of it.
+      command: "npm run build:standalone && node .next/standalone/server.js",
+      url: "http://localhost:3000",
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+      // Next inlines this at build time, so it has to be present for the build, not the run.
+      env: {
+        NEXT_PUBLIC_API_URL: process.env.E2E_API_URL ?? "http://localhost:8080",
+      },
+    },
+  ],
 });

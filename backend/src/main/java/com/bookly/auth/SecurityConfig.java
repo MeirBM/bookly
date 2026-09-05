@@ -7,6 +7,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.enums.SecuritySchemeType;
 import io.swagger.v3.oas.annotations.security.SecurityScheme;
 import java.time.Clock;
+import java.time.Duration;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -27,6 +29,9 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 @Configuration
 @EnableWebSecurity
@@ -50,6 +55,7 @@ public class SecurityConfig {
                                            AuthenticationEntryPoint entryPoint,
                                            AccessDeniedHandler accessDeniedHandler,
                                            TenantGuard tenantGuard,
+                                           CorsConfigurationSource corsConfigurationSource,
                                            @Value("${bookly.security.expose-api-docs:false}")
                                            boolean exposeApiDocs) throws Exception {
         String[] apiDocPaths = {"/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html"};
@@ -72,6 +78,11 @@ public class SecurityConfig {
                 // No cookies are used, so there is no cookie for a third-party site to ride on.
                 // The same API must serve Android and iOS clients that have no cookie jar.
                 .csrf(csrf -> csrf.disable())
+                // Registered so Spring Security's CorsFilter answers the preflight before
+                // authorization runs. Without it the chain replied 401 to every OPTIONS - a
+                // preflight carries no credentials by construction - and the browser therefore
+                // refused every call the dashboard makes. The API was correct and unreachable.
+                .cors(cors -> cors.configurationSource(corsConfigurationSource))
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/**").permitAll()
@@ -101,6 +112,34 @@ public class SecurityConfig {
             mapper.writeValue(response.getOutputStream(),
                     ApiError.of("UNAUTHENTICATED", "Authentication is required."));
         };
+    }
+
+    /**
+     * Cross-origin access for the browser client.
+     *
+     * <p>The deployment is cross-origin by design — the frontend and the API are separate services
+     * — so this is required rather than a convenience. Origins are listed explicitly and read from
+     * configuration: {@code allowedOrigins("*")} would let any site on the internet script this API
+     * with a token it obtained, and the wildcard is the shortest thing that appears to work, which
+     * is exactly why it gets reached for.
+     *
+     * <p>Credentials are not allowed, deliberately. Authentication travels in an {@code
+     * Authorization} header the client sets, not in a cookie the browser attaches on its own, so
+     * there is nothing for a third-party page to ride on and no CSRF surface to defend.
+     */
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource(
+            @Value("${bookly.cors.allowed-origins:http://localhost:3000}") List<String> origins) {
+        CorsConfiguration configuration = new CorsConfiguration();
+        configuration.setAllowedOrigins(origins);
+        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type"));
+        configuration.setAllowCredentials(false);
+        configuration.setMaxAge(Duration.ofMinutes(30));
+
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/api/**", configuration);
+        return source;
     }
 
     /**

@@ -70,6 +70,9 @@ Each resolves to one true/false answer and names the test that decides it.
 | 2.25 | Schema naming holds both ways: every `*_at` column is `timestamptz` and every `*_local` column is `time without time zone` | `SchemaConventionsIT` |
 | 2.26 | The status code the OpenAPI document declares for an operation is the status that operation actually returns: creates declare 201, deletes declare 204 | `OpenApiIT.documentedStatusCodesMatchReality` |
 | 2.27 | The availability response states the step it was computed on, so a client knows what grid it received | `AvailabilityIT.responseStatesTheStep` |
+| 2.28 | The API answers a cross-origin preflight from the dashboard's configured origin, and refuses one from any other origin | `dashboard.spec.ts`, `CorsContractIT` |
+| 2.29 | No single request can be made arbitrarily expensive by rows a caller creates: duplicate working windows are refused, overlapping windows and busy periods are merged before stepping, and each table has a per-business row cap | `AvailabilityCalculatorTest`, `BusinessConfigurationIT.refusesDuplicateWorkingWindow`, `.refusesRowsPastTheLimit` |
+| 2.30 | Every `/api` route is rate limited, not only `/api/auth` | `AuthRateLimitIT` |
 
 ### Interface
 
@@ -185,7 +188,7 @@ The warnings that would be given to a colleague starting this turn.
 
 ## Definition of done for this turn
 
-All twenty-seven criteria in part 2 are true, `docs/audit/turn-2.md` records the five Merge-Readiness
+All thirty criteria in part 2 are true, `docs/audit/turn-2.md` records the five Merge-Readiness
 criteria with evidence, and the branch merges to `main` with CI green.
 
 ---
@@ -195,5 +198,6 @@ criteria with evidence, and the branch merges to `main` with CI green.
 | Date | Change |
 |---|---|
 | 2026-09-05 | First version, written before any implementation commit. |
+| 2026-09-05 | Three criteria added after the security review, and one after the browser tests. 2.29 and 2.30 exist because the engine's cost was quadratic in rows a caller can create — twenty thousand identical working windows and twenty thousand overlapping blocks made one request roughly 10^10 comparisons, which no rate limit can help with because the cost sits inside a single request — and because rate limiting reached nothing this turn added. 2.28 exists because the browser tests found the dashboard could not load *any* data: a CORS preflight carries no credentials by construction, the filter chain answered it 401, and the shipped compose file serves the two on different ports. **The API was correct and unreachable, and only a browser could tell us.** |
 | 2026-09-05 | Revised after the test writer reported six ambiguities. 2.7 now names two deciders, because the one it named could see neither half of what it asked for. 2.14 says employee↔service links are replaced as a set, which is what the API actually models. Part 3 now states which reading of 2.12 is intended — a window starting in the skipped hour is clipped to the first real instant — since the two readings agree only when the step divides the gap. Added 2.26 and 2.27 from two real defects the report exposed: the OpenAPI document declared 200 for every create and delete while the code returns 201 and 204, so the contract was lying about the API it describes and a generated client would be wrong; and the availability response never stated the step it was computed on, leaving a client unable to know what grid it received. **`CLAUDE.md`'s error-shape rule was also imprecise enough that the test writer resolved it by assertion and had to walk that back — it now says `fieldErrors` appears only on validation failures.** |
 | 2026-09-05 | Part 3 rewritten on two points the implementation disproved, and three criteria added. Tenant access moves from `@PreAuthorize` to the security filter chain, because method security runs after argument resolution and an outsider was getting 400 for a missing parameter before the tenant check ran at all (2.24). Moving it exposed a second defect: Spring's default `AccessDeniedHandler` calls `sendError`, the container re-dispatches as ERROR, every `OncePerRequestFilter` correctly declines to run twice, and the second pass therefore looks anonymous — turning a correct 403 into a 401 telling an authenticated caller to authenticate (2.23). The column-naming convention is settled in both directions rather than excepted for `working_hours` (2.25). **The first two were defects in this document's architecture section, found by building it.** |
