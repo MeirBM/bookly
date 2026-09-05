@@ -3,15 +3,22 @@ package com.bookly.business;
 import com.bookly.auth.BooklyPrincipal;
 import java.util.UUID;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 
 /**
  * The one place tenant access is decided.
  *
- * <p>Referenced from {@code @PreAuthorize("@tenantGuard.canAccess(#businessId)")} on every
- * tenant-scoped route. There is deliberately a single implementation and a single call shape, so
- * that "who may read this business" has one answer and one place to audit.
+ * <p>Consulted from the security filter chain, not from {@code @PreAuthorize}. That ordering
+ * matters: method security runs after Spring has resolved the handler's arguments, so a request
+ * missing a required query parameter was answered 400 before anyone asked whether the caller was
+ * entitled to the business at all. Authorization belongs before input validation, or an outsider
+ * gets to probe what the endpoint accepts.
+ *
+ * <p>Moving it also removes the silent failure mode that {@code @PreAuthorize} carries: an
+ * annotation that does nothing when method security is switched off, or when the method is called
+ * from inside the same bean, looks exactly like one that works.
+ *
+ * <p>One implementation, one call shape, one place to audit.
  *
  * <p>Note what it does not do: it never reads a business id from a request body, and it never
  * trusts a claim inside the access token. Membership is looked up per request, so revoking someone
@@ -26,12 +33,11 @@ public class TenantGuard {
         this.memberRepository = memberRepository;
     }
 
-    public boolean canAccess(UUID businessId) {
+    public boolean canAccess(Authentication authentication, UUID businessId) {
         if (businessId == null) {
             return false;
         }
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication == null
+        if (authentication == null || !authentication.isAuthenticated()
                 || !(authentication.getPrincipal() instanceof BooklyPrincipal principal)) {
             return false;
         }

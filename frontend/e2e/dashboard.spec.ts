@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 
 /**
  * Turn-1 criterion 1.17: the frontend redirects an unauthenticated visit to /dashboard to /login.
@@ -80,21 +80,29 @@ test.describe("dashboard access", () => {
   });
 
   /**
-   * The case that gives the one above its meaning. A component that redirects unconditionally —
-   * or that redirects before it has read storage, which is the defect this regresses against —
-   * passes the first test perfectly while bouncing every signed-in user to login on each reload.
+   * A session the server no longer accepts is cleared, and the visitor is sent to the login form.
+   *
+   * <p>This used to be written with a synthetic token and the opposite expectation, and it was
+   * wrong: since refresh-on-401 was wired, the app sends such a token to /api/auth/refresh, the
+   * refresh fails because the server never issued it, and the app correctly concludes the session
+   * is dead. Clearing it is right — the alternative is a visitor parked on a dashboard that can
+   * never load, with no route to the login form that would fix it. The regression the old test was
+   * guarding now lives in "keeps a visitor with a real session on /dashboard", which uses a session
+   * the server actually issued so that a bounce can only mean the redirect fired too early.
    */
-  test("keeps a visitor with a stored session on /dashboard", async ({ page }) => {
-    await seedSession(page, seededSession());
+  test("a stored session the server rejects sends the visitor to login", async ({ page }) => {
+    await seedSession(page, {
+      accessToken: "not.a.token-the-server-ever-issued", // allow-secret: browser test fixture
+      refreshToken: "11111111-2222-3333-4444-555555555555", // allow-secret: browser test fixture
+      expiresInSeconds: 3600,
+    });
 
     await page.goto("/dashboard");
 
-    expect(
-      await wasBouncedToLogin(page),
-      "a visitor whose session is in localStorage was redirected to /login; a redirect decided " +
-        "before stored session state has been read bounces signed-in users on every reload",
-    ).toBe(false);
-    await expect(page).toHaveURL(DASHBOARD, { timeout: SETTLE });
+    await expect(
+      page,
+      "a session that cannot be refreshed is dead, and a dead session belongs at the login form",
+    ).toHaveURL(LOGIN, { timeout: SETTLE });
   });
 
   /**
@@ -135,5 +143,400 @@ test.describe("dashboard access", () => {
       page,
       "an entry under bookly.tokens carrying no access token must not count as being signed in",
     ).toHaveURL(LOGIN, { timeout: SETTLE });
+  });
+});
+
+/* ------------------------------------------------------------------------- *
+ * Turn 2: the dashboard screens. Criteria 2.20, 2.21 and 2.22.
+ *
+ * These need the backend, unlike the criterion-1.17 tests above. Each test seeds
+ * its own business through the API and signs the browser in with the tokens that
+ * seeding returned, so no test depends on a shared fixture or on the order the
+ * suite happens to run in.
+ *
+ * The browser and the business are both pinned to UTC. What the screen renders is
+ * an instant formatted in the viewer's zone, so leaving either to the machine's
+ * settings would make the expected times depend on where the suite is run.
+ *
+ * Written from the criteria and from what a user can see; frontend/src was not read.
+ * ------------------------------------------------------------------------- */
+
+const API = process.env.E2E_API_URL ?? "http://localhost:8080";
+const PASSWORD = "correct-horse-battery-staple-1"; // allow-secret: browser test fixture
+
+/** Local times the engine offers, in the two formats a browser commonly renders. */
+function timeIsShown(pageText: string, hhmm: string): boolean {
+  const [h, m] = hhmm.split(":").map(Number);
+  const twelve = `${((h + 11) % 12) + 1}:${String(m).padStart(2, "0")}`;
+  const suffix = h < 12 ? "AM" : "PM";
+  return (
+    new RegExp(`\\b${hhmm}\\b`).test(pageText) ||
+    new RegExp(`\\b${twelve}\\s*${suffix}\\b`, "i").test(pageText)
+  );
+}
+
+type Owner = { tokens: unknown; auth: Record<string, string> };
+
+type Seeded = {
+  businessId: string;
+  businessName: string;
+  serviceName: string;
+  serviceId: string;
+  employeeName: string;
+  owner: Owner;
+};
+
+async function newOwner(request: APIRequestContext): Promise<Owner> {
+  const email = `e2e-${Date.now()}-${Math.floor(Math.random() * 1e6)}@example.test`;
+  const registered = await request.post(`${API}/api/auth/register`, {
+    data: { email, password: PASSWORD, fullName: "Dashboard Owner" },
+  });
+  expect(registered.status(), "seeding: register").toBe(201);
+  const loggedIn = await request.post(`${API}/api/auth/login`, { data: { email, password: PASSWORD } });
+  expect(loggedIn.status(), "seeding: login").toBe(200);
+  const tokens = await loggedIn.json();
+  return { tokens, auth: { Authorization: `Bearer ${tokens.accessToken}` } };
+}
+
+/** Creates one business, configured as far as the options ask for. */
+async function seed(
+  request: APIRequestContext,
+  owner: Owner,
+  options: { withService?: boolean; withEmployee?: boolean; withHours?: boolean },
+): Promise<Seeded> {
+  const stamp = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  const businessName = `E2E Salon ${stamp}`;
+  const business = await request.post(`${API}/api/businesses`, {
+    data: { name: businessName, timezone: "UTC" },
+    headers: owner.auth,
+  });
+  expect(business.status(), "seeding: create business").toBe(201);
+  const businessId = (await business.json()).id;
+
+  const serviceName = `Signature Cut ${stamp}`;
+  const employeeName = `Alex Stylist ${stamp}`;
+  let serviceId = "";
+  if (options.withService) {
+    const service = await request.post(`${API}/api/businesses/${businessId}/services`, {
+      data: { name: serviceName, durationMinutes: 60, priceMinor: 5000 },
+      headers: owner.auth,
+    });
+    expect(service.status(), "seeding: create service").toBe(201);
+    serviceId = (await service.json()).id;
+  }
+  if (options.withEmployee) {
+    const employee = await request.post(`${API}/api/businesses/${businessId}/employees`, {
+      data: { fullName: employeeName },
+      headers: owner.auth,
+    });
+    expect(employee.status(), "seeding: create employee").toBe(201);
+    const employeeId = (await employee.json()).id;
+    if (serviceId) {
+      await request.put(`${API}/api/businesses/${businessId}/employees/${employeeId}/services`, {
+        data: { serviceIds: [serviceId] },
+        headers: owner.auth,
+      });
+    }
+    if (options.withHours) {
+      // Every weekday, so the screen's own choice of date cannot decide the outcome.
+      for (const weekday of ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]) {
+        const hours = await request.post(
+          `${API}/api/businesses/${businessId}/employees/${employeeId}/working-hours`,
+          { data: { weekday, startsAt: "09:00:00", endsAt: "12:00:00" }, headers: owner.auth },
+        );
+        expect(hours.status(), "seeding: working hours").toBe(201);
+      }
+    }
+  }
+  return { businessId, businessName, serviceName, serviceId, employeeName, owner };
+}
+
+async function signIn(page: Page, owner: Owner) {
+  await page.addInitScript(
+    ([key, value]) => window.localStorage.setItem(key as string, value as string),
+    [SESSION_KEY, JSON.stringify(owner.tokens)] as const,
+  );
+}
+
+/**
+ * Picks a service in the availability screen's picker. The option's text is the service name with
+ * its duration appended, so it is matched by substring and selected by value rather than by an
+ * exact label the screen never promised.
+ */
+async function chooseService(page: Page, serviceName: string) {
+  const picker = page.locator("select").first();
+  const option = picker.locator("option", { hasText: serviceName });
+  await expect(option, `the picker must offer "${serviceName}"`).toHaveCount(1, { timeout: SETTLE });
+  await picker.selectOption((await option.getAttribute("value")) ?? "");
+}
+
+async function settledText(page: Page): Promise<string> {
+  await expect(page.getByText(/loading/i)).toHaveCount(0, { timeout: SETTLE });
+  return page.locator("body").innerText();
+}
+
+const ERROR_TEXT = /could not|couldn't|went wrong|failed|try again/i;
+const GUIDANCE_TEXT = /add|create|get started|first|no .* yet/i;
+
+/** Holds the API open and looks while it is still open. */
+async function assertLoadingStateIsShown(page: Page, url: string) {
+  await page.route("**/api/**", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    try {
+      await route.continue();
+    } catch {
+      // The page moved on while this was held; there is nothing left to continue.
+    }
+  });
+  try {
+    await page.goto(url);
+    await expect(
+      page.getByText(/loading/i).first(),
+      "a request that has not answered yet must say so",
+    ).toBeVisible({ timeout: SETTLE });
+  } finally {
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  }
+}
+
+/** Fails the matching API calls and asserts the screen says so, rather than waiting forever. */
+async function assertErrorStateIsShown(
+  page: Page,
+  url: string,
+  options: { failing?: string; prepare?: (page: Page) => Promise<void>; because?: string } = {},
+): Promise<string> {
+  const { failing = "**/api/**", prepare, because = "" } = options;
+  await page.route(failing, (route) =>
+    route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ code: "BOOM", message: "boom" }),
+    }),
+  );
+  try {
+    await page.goto(url);
+    if (prepare) {
+      await prepare(page);
+    }
+    await expect(
+      page.getByText(ERROR_TEXT).first(),
+      `a failure must look like a failure${because}: a screen that keeps saying "loading" after ` +
+        "the request has failed is showing one of its four states in place of another",
+    ).toBeVisible({ timeout: SETTLE });
+    return await page.locator("body").innerText();
+  } finally {
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  }
+}
+
+test.describe("dashboard screens", () => {
+  test.use({ timezoneId: "UTC" });
+
+  test.beforeAll(async ({ request }) => {
+    const health = await request.get(`${API}/actuator/health`).catch(() => null);
+    expect(
+      health?.ok(),
+      `these tests need the backend at ${API}; start it before running the suite`,
+    ).toBe(true);
+  });
+
+  /**
+   * The defect the browser tests found, kept as its own regression rather than left implicit in
+   * three failing screens. A browser sends a preflight before any cross-origin API call and sends
+   * no credentials on it; a chain that answers 401 makes every dashboard fetch impossible.
+   */
+  test("the API accepts a cross-origin preflight from the dashboard's origin", async ({ request }) => {
+    const preflight = await request.fetch(`${API}/api/businesses`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: "http://localhost:3000",
+        "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Headers": "authorization",
+      },
+    });
+
+    expect(
+      preflight.status(),
+      "a CORS preflight carries no credentials by construction, so answering it 401 blocks " +
+        "every call the dashboard makes",
+    ).toBeLessThan(400);
+    expect(
+      preflight.headers()["access-control-allow-origin"],
+      "the preflight must allow the origin the frontend is served from",
+    ).toBeTruthy();
+  });
+
+  /**
+   * 2.20 for the three list screens. CLAUDE.md's rule is every screen that loads data, and the
+   * overview loads data too, so it is covered in its own test below alongside availability, which
+   * needs a service chosen before it has anything to show.
+   */
+  for (const screen of ["overview", "services", "employees"] as const) {
+    test(`2.20 the ${screen} screen renders loading, empty, error and content distinguishably`, async ({
+      page,
+      request,
+    }) => {
+      const owner = await newOwner(request);
+      const bare = await seed(request, owner, {});
+      const configured = await seed(request, owner, { withService: true, withEmployee: true });
+      const suffix = screen === "overview" ? "" : `/${screen}`;
+      const url = (id: string) => `/dashboard/${id}${suffix}`;
+      await signIn(page, owner);
+
+      await assertLoadingStateIsShown(page, url(bare.businessId));
+
+      await page.goto(url(bare.businessId));
+      const emptyText = await settledText(page);
+      expect(emptyText, `the ${screen} screen of a bare business must not report a failure`)
+        .not.toMatch(ERROR_TEXT);
+
+      const errorText = await assertErrorStateIsShown(page, url(bare.businessId));
+
+      await page.goto(url(configured.businessId));
+      const contentText = await settledText(page);
+      const marker =
+        screen === "overview"
+          ? /\d+\s+service/i
+          : new RegExp(screen === "services" ? configured.serviceName : configured.employeeName);
+      expect(contentText, `the ${screen} screen must show what the business has`).toMatch(marker);
+
+      expect(emptyText, "empty must not read as content").not.toMatch(marker);
+      expect(emptyText, "empty must not read as error").not.toEqual(errorText);
+      expect(contentText, "content must not read as error").not.toEqual(errorText);
+    });
+  }
+
+  /**
+   * 2.20 for the availability screen. Its error state is asserted twice on purpose: once when the
+   * availability request itself fails, and once when the service list it depends on fails. A screen
+   * that reports the first and hangs on the second has an error state only for the failure its
+   * author happened to think of.
+   */
+  test("2.20 the availability screen renders loading, empty, error and content distinguishably", async ({
+    page,
+    request,
+  }) => {
+    const owner = await newOwner(request);
+    const bookable = await seed(request, owner, { withService: true, withEmployee: true, withHours: true });
+    const noHours = await seed(request, owner, { withService: true, withEmployee: true });
+    const url = (id: string) => `/dashboard/${id}/availability`;
+    const date = "2026-09-09";
+    await signIn(page, owner);
+
+    await assertLoadingStateIsShown(page, url(bookable.businessId));
+
+    // Empty: a service nobody has hours for. A real question with an empty answer.
+    await page.goto(url(noHours.businessId));
+    await chooseService(page, noHours.serviceName);
+    await page.locator("input[type=date]").fill(date);
+    const emptyText = await settledText(page);
+
+    // Error, when the availability request itself fails. The service list still loads, so the
+    // screen has everything it needs to report the failure.
+    const errorText = await assertErrorStateIsShown(page, url(bookable.businessId), {
+      // Scoped to the API: the screen's own URL ends in /availability too, and a glob that
+      // matched it would replace the page itself rather than the request it makes.
+      failing: "**/api/**availability**",
+      because: " when the availability request fails",
+      prepare: async (p) => {
+        await chooseService(p, bookable.serviceName);
+        await p.locator("input[type=date]").fill(date);
+      },
+    });
+
+    // Error, when the list of services the screen depends on fails. The screen cannot offer a
+    // choice it could not load, and saying nothing leaves the reader waiting on a request that
+    // already failed.
+    await assertErrorStateIsShown(page, url(bookable.businessId), {
+      because: " when the service list fails",
+    });
+
+    // Content.
+    await page.goto(url(bookable.businessId));
+    await chooseService(page, bookable.serviceName);
+    await page.locator("input[type=date]").fill(date);
+    const contentText = await settledText(page);
+    expect(contentText, "the availability screen must show the times it computed").toMatch(/\d{1,2}:\d{2}/);
+
+    expect(emptyText, "empty must not read as error").not.toMatch(ERROR_TEXT);
+    expect(emptyText, "empty must not read as content").not.toEqual(contentText);
+    expect(contentText, "content must not read as error").not.toEqual(errorText);
+  });
+
+  /** 2.21 — a business with nothing yet is told what to do next. */
+  test("newBusinessIsGuided", async ({ page, request }) => {
+    const owner = await newOwner(request);
+    const fresh = await seed(request, owner, {});
+    await signIn(page, owner);
+
+    for (const suffix of ["", "/services", "/employees"]) {
+      const screen = suffix === "" ? "overview" : suffix.slice(1);
+      await page.goto(`/dashboard/${fresh.businessId}${suffix}`);
+      const text = await settledText(page);
+
+      // The add form is on the screen in every state, including the error state, so matching
+      // "Add a service" alone would pass while the screen was actually apologising. The empty
+      // state has to be the empty state first.
+      expect(text, `the ${screen} screen must be showing its empty state, not its error state`)
+        .not.toMatch(ERROR_TEXT);
+      expect(
+        text,
+        `the ${screen} screen of a new business must say what to do next, not present an empty table`,
+      ).toMatch(GUIDANCE_TEXT);
+      await expect(
+        page.locator("button[type=submit], a[href]").filter({ hasText: /add|create|new|check/i }).first(),
+        `the ${screen} screen must offer the action it is recommending`,
+      ).toBeVisible({ timeout: SETTLE });
+      await expect(
+        page.locator("table tbody tr"),
+        "an empty table is the thing this criterion exists to forbid",
+      ).toHaveCount(0);
+    }
+  });
+
+  /** 2.22 — the availability view shows the engine's real slots, or says plainly there are none. */
+  test("availabilityShowsRealSlotsOrSaysThereAreNone", async ({ page, request }) => {
+    const owner = await newOwner(request);
+    const bookable = await seed(request, owner, { withService: true, withEmployee: true, withHours: true });
+    await signIn(page, owner);
+
+    // What the engine actually answers for the date the screen will be asked about.
+    const date = "2026-09-09";
+    const api = await request.get(
+      `${API}/api/businesses/${bookable.businessId}/availability` +
+        `?serviceId=${bookable.serviceId}&date=${date}`,
+      { headers: owner.auth },
+    );
+    expect(api.status(), "the engine answers over the API").toBe(200);
+    const expectedSlots: { start: string }[] = (await api.json()).slots;
+    expect(expectedSlots.length, "the seeded 09:00-12:00 window offers slots").toBeGreaterThan(0);
+    const expectedTimes = expectedSlots.map((s) => s.start.substring(11, 16));
+
+    await page.goto(`/dashboard/${bookable.businessId}/availability`);
+    await chooseService(page, bookable.serviceName);
+    await page.locator("input[type=date]").fill(date);
+    const shown = await settledText(page);
+
+    for (const time of [expectedTimes[0], expectedTimes[expectedTimes.length - 1]]) {
+      expect(timeIsShown(shown, time), `the view must show the engine's slot at ${time}`).toBe(true);
+    }
+    for (const notOffered of ["08:45", "12:15"]) {
+      expect(
+        timeIsShown(shown, notOffered),
+        `${notOffered} is outside the working window and must not be offered`,
+      ).toBe(false);
+    }
+
+    // And a business whose employee has no hours has nothing to offer, said plainly.
+    const unbookable = await seed(request, owner, { withService: true, withEmployee: true });
+    await page.goto(`/dashboard/${unbookable.businessId}/availability`);
+    await chooseService(page, unbookable.serviceName);
+    await page.locator("input[type=date]").fill(date);
+    const none = await settledText(page);
+
+    expect(
+      none,
+      "no availability must be stated, not left as a blank area the reader has to interpret",
+    ).toMatch(/no (available |free )?(slots|times|availability)|nothing available|none available|no times/i);
   });
 });

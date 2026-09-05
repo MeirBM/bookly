@@ -118,7 +118,7 @@ drifts.
 | Turn | Scope | State |
 |---|---|---|
 | 1 | Foundation, authentication, tenant isolation | complete — [audit](docs/audit/turn-1.md) |
-| 2 | Services, employees, working hours, availability engine | planned |
+| 2 | Services, employees, working hours, availability engine | complete — [audit](docs/audit/turn-2.md) |
 | 3 | Booking, concurrency, public booking page, deployment | planned |
 
 Deployed URL: _added in turn 3._

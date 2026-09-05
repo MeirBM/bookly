@@ -29,8 +29,11 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * Raised when {@code @PreAuthorize} refuses the call, which for tenant-scoped routes means
-     * {@code TenantGuard} found no membership. Mapped to the same body as a missing business.
+     * A backstop for authorization failures raised inside a handler.
+     *
+     * <p>Tenant denials no longer arrive here: the filter chain decides them before the dispatcher
+     * runs, and its own handler writes the response. This remains for any future rule enforced
+     * within a controller, so such a refusal cannot fall through to the 500 catch-all.
      */
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<ApiError> handleAccessDenied(AccessDeniedException ex) {

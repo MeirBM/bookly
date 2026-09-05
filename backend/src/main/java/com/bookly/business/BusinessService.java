@@ -47,7 +47,7 @@ public class BusinessService {
     /**
      * Reads a business the caller is already known to be a member of.
      *
-     * <p>{@code TenantGuard} has run before this method by way of {@code @PreAuthorize}. The
+     * <p>{@code TenantGuard} has run before this method, in the security filter chain. The
      * {@code orElseThrow} therefore only fires in a race where the business was deleted between the
      * two, and it returns the same denial rather than a 404 — criterion 1.12.
      */

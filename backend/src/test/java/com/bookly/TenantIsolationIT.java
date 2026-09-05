@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import org.assertj.core.api.SoftAssertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.Test;
@@ -202,5 +203,125 @@ class TenantIsolationIT extends ApiIntegrationTest {
         assertThat(forbidden.getStatusCode().value())
                 .as("and the shared answer is 403, per spec part 3 and criterion 1.10")
                 .isEqualTo(403);
+    }
+
+    /**
+     * 2.18 — a resource belonging to another business cannot be read, modified or deleted, even by
+     * id, and even by a caller who is a perfectly legitimate member of the business named in the
+     * path.
+     *
+     * <p>Pitfall 7 is the whole of it: the tenant guard proves the caller belongs to business A. It
+     * does not prove that employee {@code x} does. {@code GET /businesses/{a}/employees/{x}} passes
+     * the guard while reaching into business B, so every lookup has to filter on both — the guard
+     * is the gate, the filter is the depth behind it.
+     *
+     * <p>Each foreign id is asserted to be answered exactly as an id that never existed. That is
+     * turn 1's criterion 1.12 applied one level down: if "belongs to someone else" and "does not
+     * exist" are distinguishable, the id space becomes an oracle for what other businesses own.
+     */
+    @Test
+    @DisplayName("2.18 a resource of another business is unreachable by id")
+    void crossTenantResourceIsRefused() {
+        Account mine = newAccount("mine");
+        String myBusiness = newBusiness(mine, "My Salon", "Asia/Jerusalem").path("id").asText();
+        String myService = newService(mine, myBusiness, "My Service", 30).path("id").asText();
+
+        Account theirs = newAccount("theirs");
+        String theirBusiness = newBusiness(theirs, "Their Salon", "Asia/Jerusalem").path("id").asText();
+        String theirService = newService(theirs, theirBusiness, "Their Service", 30).path("id").asText();
+        String theirEmployee = newEmployee(theirs, theirBusiness, "Their Employee").path("id").asText();
+        linkServices(theirs, theirBusiness, theirEmployee, theirService);
+        String theirWorkingHours = newWorkingHours(
+                        theirs, theirBusiness, theirEmployee, java.time.DayOfWeek.MONDAY, "09:00:00", "17:00:00")
+                .path("id")
+                .asText();
+        java.time.Instant blockStart = java.time.LocalDate.of(2026, 6, 10)
+                .atTime(10, 0)
+                .atZone(java.time.ZoneId.of("Asia/Jerusalem"))
+                .toInstant();
+        String theirBlockedTime = newBlockedTime(
+                        theirs, theirBusiness, theirEmployee, blockStart, blockStart.plusSeconds(3600), "Theirs")
+                .path("id")
+                .asText();
+
+        // Every attempt is made through *my* business, which I am entitled to, at *their* row.
+        String base = "/api/businesses/" + myBusiness;
+        record Attempt(String what, HttpMethod method, String pathWithForeignId, String pathWithUnknownId, Object body) {}
+        String unknown = UUID.randomUUID().toString();
+        List<Attempt> attempts = List.of(
+                new Attempt("read another business's working hours",
+                        HttpMethod.GET,
+                        base + "/employees/" + theirEmployee + "/working-hours",
+                        base + "/employees/" + unknown + "/working-hours",
+                        null),
+                new Attempt("relink another business's employee",
+                        HttpMethod.PUT,
+                        base + "/employees/" + theirEmployee + "/services",
+                        base + "/employees/" + unknown + "/services",
+                        body("serviceIds", List.of(myService))),
+                new Attempt("delete another business's employee",
+                        HttpMethod.DELETE,
+                        base + "/employees/" + theirEmployee,
+                        base + "/employees/" + unknown,
+                        null),
+                new Attempt("delete another business's service",
+                        HttpMethod.DELETE,
+                        base + "/services/" + theirService,
+                        base + "/services/" + unknown,
+                        null),
+                new Attempt("delete another business's working hours",
+                        HttpMethod.DELETE,
+                        base + "/working-hours/" + theirWorkingHours,
+                        base + "/working-hours/" + unknown,
+                        null),
+                new Attempt("delete another business's blocked time",
+                        HttpMethod.DELETE,
+                        base + "/blocked-times/" + theirBlockedTime,
+                        base + "/blocked-times/" + unknown,
+                        null));
+
+        SoftAssertions soft = new SoftAssertions();
+        for (Attempt attempt : attempts) {
+            ResponseEntity<String> foreign =
+                    send(attempt.method(), attempt.pathWithForeignId(), attempt.body(), mine.accessToken());
+            ResponseEntity<String> unknownId =
+                    send(attempt.method(), attempt.pathWithUnknownId(), attempt.body(), mine.accessToken());
+
+            soft.assertThat(foreign.getStatusCode().is2xxSuccessful())
+                    .as("%s (%s %s) must not succeed", attempt.what(), attempt.method(), attempt.pathWithForeignId())
+                    .isFalse();
+            soft.assertThat(foreign.getStatusCode())
+                    .as("%s: a row owned by someone else must answer exactly as one that never "
+                            + "existed, or the id space tells an attacker what is real", attempt.what())
+                    .isEqualTo(unknownId.getStatusCode());
+            soft.assertThat(foreign.getBody())
+                    .as("%s: same body for the foreign id and the unknown id", attempt.what())
+                    .isEqualTo(unknownId.getBody());
+            soft.assertThat(String.valueOf(foreign.getBody()))
+                    .as("%s: the refusal must not echo what it refused", attempt.what())
+                    .doesNotContain("Their Employee", "Their Service");
+        }
+        soft.assertAll();
+
+        // And nothing was actually touched: the owner still sees everything they had.
+        assertThat(json(get("/api/businesses/" + theirBusiness + "/employees", theirs.accessToken())).toString())
+                .as("their employee survived every attempt")
+                .contains(theirEmployee);
+        assertThat(json(get("/api/businesses/" + theirBusiness + "/services", theirs.accessToken())).toString())
+                .as("their service survived every attempt")
+                .contains(theirService);
+        assertThat(json(get("/api/businesses/" + theirBusiness + "/blocked-times", theirs.accessToken())).toString())
+                .as("their blocked time survived every attempt")
+                .contains(theirBlockedTime);
+        assertThat(json(get("/api/businesses/" + theirBusiness + "/employees/" + theirEmployee
+                        + "/working-hours", theirs.accessToken())).toString())
+                .as("their working hours survived every attempt")
+                .contains(theirWorkingHours);
+        Integer stillLinked = jdbc().queryForObject(
+                "select count(*) from employee_services where employee_id = ?::uuid and service_id = ?::uuid",
+                Integer.class,
+                theirEmployee,
+                theirService);
+        assertThat(stillLinked).as("their employee-service link was not rewritten from outside").isEqualTo(1);
     }
 }

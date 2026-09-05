@@ -18,6 +18,7 @@ bookly:
       # Effectively off: these suites drive many requests from one address, and a limit tripping
       # mid-suite would produce failures that look like defects in the code under test.
       max-requests: 100000
+      api-max-requests: 100000
       window: PT1M
     # BCrypt is deliberately slow; hashing once per test would dominate the suite.
     # Turn-1 spec, pitfall 8. This value must never reach a non-test profile.

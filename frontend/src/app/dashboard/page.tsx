@@ -2,6 +2,7 @@
 
 import { zodResolver } from "@/lib/zod-resolver";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -87,7 +88,9 @@ export default function DashboardPage() {
           <ul className="mt-4 divide-y divide-slate-200 rounded-md border border-slate-200 bg-white">
             {businesses.data.map((business) => (
               <li key={business.id} className="px-4 py-3">
-                <p className="font-medium">{business.name}</p>
+                <Link className="font-medium underline" href={`/dashboard/${business.id}`}>
+                  {business.name}
+                </Link>
                 <p className="text-sm text-slate-600">
                   /book/{business.slug} · {business.timezone}
                 </p>

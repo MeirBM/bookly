@@ -90,11 +90,15 @@ rule that was never written down.
 
 ## REST, validation, errors
 
-- Plural nouns, no verbs in paths. 201 with a `Location` header on create; 204 on delete.
+- Plural nouns, no verbs in paths. 201 with a `Location` header on create; 204 on delete —
+  and **declare them**: springdoc assumes 200 unless told otherwise, so an undocumented
+  create advertises a status it does not return and any client generated from the document
+  is wrong.
 - `@Valid` on every request body, Jakarta constraints on the DTO. Validation lives on the DTO, not
   in the controller body.
-- One `@RestControllerAdvice` maps exceptions to a single error shape:
-  `{ "code", "message", "fieldErrors" }`. A `code` is a stable string a client can branch on.
+- One `@RestControllerAdvice` maps exceptions to a single error shape: `code` and `message`
+  always, plus `fieldErrors` **only on a validation failure** — an empty map on every other
+  error is noise a client has to ignore. A `code` is a stable string a client can branch on.
 - An error message never contains a stack trace, a SQL fragment, or whether an email is registered.
 - Every endpoint appears in the OpenAPI document with its response codes.
 

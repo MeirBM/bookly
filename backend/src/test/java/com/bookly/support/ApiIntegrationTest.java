@@ -2,6 +2,9 @@ package com.bookly.support;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.DayOfWeek;
+import java.time.Instant;
+import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -137,12 +140,85 @@ public abstract class ApiIntegrationTest extends AbstractIntegrationTest {
 
     /** Creates a business owned by the given account and returns the created representation. */
     protected JsonNode newBusiness(Account owner, String name) {
+        return newBusiness(owner, name, "Europe/London");
+    }
+
+    protected JsonNode newBusiness(Account owner, String name, String timezone) {
         ResponseEntity<String> created =
-                post("/api/businesses", body("name", name, "timezone", "Europe/London"), owner.accessToken());
+                post("/api/businesses", body("name", name, "timezone", timezone), owner.accessToken());
         if (created.getStatusCode().value() != 201) {
             throw new AssertionError("fixture setup: create business expected 201 but got "
                     + created.getStatusCode() + " body=" + created.getBody());
         }
         return json(created);
+    }
+
+    // ------------------------------------------------- turn-2 configuration fixtures
+
+    /** Fails loudly rather than returning a body no assertion will understand. */
+    private JsonNode created(ResponseEntity<String> response, String what) {
+        if (!response.getStatusCode().is2xxSuccessful()) {
+            throw new AssertionError("fixture setup: " + what + " expected 2xx but got "
+                    + response.getStatusCode() + " body=" + response.getBody());
+        }
+        return json(response);
+    }
+
+    protected String businessPath(String businessId, String suffix) {
+        return "/api/businesses/" + businessId + suffix;
+    }
+
+    protected JsonNode newService(Account owner, String businessId, String name, int durationMinutes) {
+        return created(
+                post(businessPath(businessId, "/services"),
+                        body("name", name, "durationMinutes", durationMinutes, "priceMinor", 5000L),
+                        owner.accessToken()),
+                "create service");
+    }
+
+    protected JsonNode newEmployee(Account owner, String businessId, String fullName) {
+        return created(
+                post(businessPath(businessId, "/employees"), body("fullName", fullName), owner.accessToken()),
+                "create employee");
+    }
+
+    protected void linkServices(Account owner, String businessId, String employeeId, String... serviceIds) {
+        ResponseEntity<String> response = send(
+                org.springframework.http.HttpMethod.PUT,
+                businessPath(businessId, "/employees/" + employeeId + "/services"),
+                body("serviceIds", java.util.List.of(serviceIds)),
+                owner.accessToken());
+        created(response, "link employee to services");
+    }
+
+    protected JsonNode newWorkingHours(
+            Account owner, String businessId, String employeeId, DayOfWeek weekday, String start, String end) {
+        return created(
+                post(businessPath(businessId, "/employees/" + employeeId + "/working-hours"),
+                        body("weekday", weekday.name(), "startsAt", start, "endsAt", end),
+                        owner.accessToken()),
+                "create working hours");
+    }
+
+    protected JsonNode newBlockedTime(
+            Account owner, String businessId, String employeeId, Instant start, Instant end, String reason) {
+        Map<String, Object> payload = body("startsAt", start.toString(), "endsAt", end.toString(), "reason", reason);
+        if (employeeId != null) {
+            payload.put("employeeId", employeeId);
+        }
+        return created(
+                post(businessPath(businessId, "/blocked-times"), payload, owner.accessToken()),
+                "create blocked time");
+    }
+
+    protected ResponseEntity<String> availability(
+            Account caller, String businessId, String serviceId, String employeeId, LocalDate date) {
+        StringBuilder path = new StringBuilder(businessPath(businessId, "/availability"))
+                .append("?serviceId=").append(serviceId)
+                .append("&date=").append(date);
+        if (employeeId != null) {
+            path.append("&employeeId=").append(employeeId);
+        }
+        return get(path.toString(), caller.accessToken());
     }
 }
