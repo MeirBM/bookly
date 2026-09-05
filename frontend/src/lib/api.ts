@@ -37,6 +37,44 @@ export type Business = {
 
 export type UserSummary = { id: string; email: string; fullName: string };
 
+export type ServiceOffering = {
+  id: string;
+  name: string;
+  durationMinutes: number;
+  priceMinor: number | null;
+};
+
+export type Employee = { id: string; fullName: string; serviceIds: string[] };
+
+export type Weekday =
+  | "MONDAY"
+  | "TUESDAY"
+  | "WEDNESDAY"
+  | "THURSDAY"
+  | "FRIDAY"
+  | "SATURDAY"
+  | "SUNDAY";
+
+export type WorkingHours = { id: string; weekday: Weekday; startsAt: string; endsAt: string };
+
+export type BlockedTime = {
+  id: string;
+  employeeId: string | null;
+  startsAt: string;
+  endsAt: string;
+  reason: string | null;
+};
+
+/** employeeIds is present even when one employee was requested, so the shape never changes. */
+export type AvailableSlot = { start: string; end: string; employeeIds: string[] };
+
+export type Availability = {
+  serviceId: string;
+  date: string;
+  timezone: string;
+  slots: AvailableSlot[];
+};
+
 /**
  * Exchanges a refresh token for a new pair, so rotation actually happens in the browser.
  *
@@ -119,4 +157,97 @@ export const api = {
 
   createBusiness: (accessToken: string, body: { name: string; timezone: string }) =>
     request<Business>("/api/businesses", { method: "POST", body, accessToken }),
+
+  getBusiness: (accessToken: string, businessId: string) =>
+    request<Business>(`/api/businesses/${businessId}`, { accessToken }),
+
+  listServices: (accessToken: string, businessId: string) =>
+    request<ServiceOffering[]>(`/api/businesses/${businessId}/services`, { accessToken }),
+
+  createService: (
+    accessToken: string,
+    businessId: string,
+    body: { name: string; durationMinutes: number },
+  ) =>
+    request<ServiceOffering>(`/api/businesses/${businessId}/services`, {
+      method: "POST",
+      body,
+      accessToken,
+    }),
+
+  deleteService: (accessToken: string, businessId: string, serviceId: string) =>
+    request<void>(`/api/businesses/${businessId}/services/${serviceId}`, {
+      method: "DELETE",
+      accessToken,
+    }),
+
+  listEmployees: (accessToken: string, businessId: string) =>
+    request<Employee[]>(`/api/businesses/${businessId}/employees`, { accessToken }),
+
+  createEmployee: (accessToken: string, businessId: string, body: { fullName: string }) =>
+    request<Employee>(`/api/businesses/${businessId}/employees`, {
+      method: "POST",
+      body,
+      accessToken,
+    }),
+
+  deleteEmployee: (accessToken: string, businessId: string, employeeId: string) =>
+    request<void>(`/api/businesses/${businessId}/employees/${employeeId}`, {
+      method: "DELETE",
+      accessToken,
+    }),
+
+  /** Replaces the whole set, so a caller never reasons about add-versus-remove. */
+  setEmployeeServices: (
+    accessToken: string,
+    businessId: string,
+    employeeId: string,
+    serviceIds: string[],
+  ) =>
+    request<Employee>(`/api/businesses/${businessId}/employees/${employeeId}/services`, {
+      method: "PUT",
+      body: { serviceIds },
+      accessToken,
+    }),
+
+  listWorkingHours: (accessToken: string, businessId: string, employeeId: string) =>
+    request<WorkingHours[]>(
+      `/api/businesses/${businessId}/employees/${employeeId}/working-hours`,
+      { accessToken },
+    ),
+
+  addWorkingHours: (
+    accessToken: string,
+    businessId: string,
+    employeeId: string,
+    body: { weekday: Weekday; startsAt: string; endsAt: string },
+  ) =>
+    request<WorkingHours>(
+      `/api/businesses/${businessId}/employees/${employeeId}/working-hours`,
+      { method: "POST", body, accessToken },
+    ),
+
+  deleteWorkingHours: (accessToken: string, businessId: string, workingHoursId: string) =>
+    request<void>(`/api/businesses/${businessId}/working-hours/${workingHoursId}`, {
+      method: "DELETE",
+      accessToken,
+    }),
+
+  listBlockedTimes: (accessToken: string, businessId: string) =>
+    request<BlockedTime[]>(`/api/businesses/${businessId}/blocked-times`, { accessToken }),
+
+  availability: (
+    accessToken: string,
+    businessId: string,
+    params: { serviceId: string; employeeId?: string; date: string },
+  ) => {
+    const query = new URLSearchParams({ serviceId: params.serviceId, date: params.date });
+    if (params.employeeId) {
+      query.set("employeeId", params.employeeId);
+    }
+    return request<Availability>(
+      `/api/businesses/${businessId}/availability?${query.toString()}`,
+      { accessToken },
+    );
+  },
 };
