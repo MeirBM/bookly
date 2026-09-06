@@ -1,15 +1,17 @@
 "use client";
 
-import { zodResolver } from "@/lib/zod-resolver";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { Field, buttonClass, inputClass } from "@/components/Field";
+import { AuthShell } from "@/components/auth/AuthShell";
+import { Field } from "@/components/Field";
 import { FormError } from "@/components/FormError";
+import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
 import { ApiError, api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { zodResolver } from "@/lib/zod-resolver";
 
 const schema = z.object({
   email: z.string().email("Enter a valid email address."),
@@ -34,9 +36,11 @@ export default function LoginPage() {
   } = useForm<z.infer<typeof schema>>({ resolver: zodResolver(schema) });
 
   return (
-    <main className="mx-auto flex w-full max-w-sm flex-1 flex-col justify-center gap-6 px-6 py-16">
-      <h1 className="text-2xl font-semibold">Sign in</h1>
-
+    <AuthShell
+      title="Sign in"
+      subtitle="Manage your services, your people and your bookings."
+      footer={{ prompt: "No account?", href: "/register", label: "Create one" }}
+    >
       <form
         className="flex flex-col gap-4"
         onSubmit={handleSubmit(async (values) => {
@@ -45,8 +49,8 @@ export default function LoginPage() {
             signIn(await api.login(values));
             router.replace("/dashboard");
           } catch (error) {
-            // The server deliberately does not say whether the account exists, and
-            // this message must not become more specific than the server's answer.
+            // The server deliberately does not say whether the account exists, and this message
+            // must not become more specific than the server's answer.
             setFailure(
               error instanceof ApiError
                 ? error.body.message
@@ -56,31 +60,16 @@ export default function LoginPage() {
         })}
       >
         <FormError message={failure} />
-
         <Field label="Email" error={errors.email?.message}>
-          <input className={inputClass} type="email" autoComplete="email" {...register("email")} />
+          <Input type="email" autoComplete="email" {...register("email")} />
         </Field>
-
         <Field label="Password" error={errors.password?.message}>
-          <input
-            className={inputClass}
-            type="password"
-            autoComplete="current-password"
-            {...register("password")}
-          />
+          <Input type="password" autoComplete="current-password" {...register("password")} />
         </Field>
-
-        <button className={buttonClass} type="submit" disabled={isSubmitting}>
+        <Button type="submit" fullWidth loading={isSubmitting}>
           {isSubmitting ? "Signing in…" : "Sign in"}
-        </button>
+        </Button>
       </form>
-
-      <p className="text-sm text-slate-600">
-        No account?{" "}
-        <Link className="underline" href="/register">
-          Create one
-        </Link>
-      </p>
-    </main>
+    </AuthShell>
   );
 }
