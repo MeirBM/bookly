@@ -32,6 +32,10 @@ spring:
     default-property-inclusion: non_null
 
 server:
+  # Railway and most platforms assign the port at runtime. Binding to a fixed 8080 makes the
+  # container look unhealthy and get restarted, which reads as a slow deploy rather than a
+  # misconfiguration - turn-3 spec, pitfall 9.
+  port: ${PORT:8080}
   error:
     include-message: never         # error bodies are built by the advice, not by Spring's default
     include-stacktrace: never
