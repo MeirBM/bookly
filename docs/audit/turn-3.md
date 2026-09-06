@@ -265,6 +265,35 @@ curl -fsS https://<backend>/v3/api-docs      # must be 403
 
 ---
 
+## Override — accepted by the project owner, 2026-09-06
+
+The verdict below stands as written: by this pack's rule, five unmet criteria are not a pass. The
+owner reviewed exactly what was outstanding and **explicitly accepted it**, and the merge proceeds on
+that decision rather than on a reinterpretation of the rule.
+
+**What was accepted:**
+
+| # | Criterion | Why it is outstanding |
+|---|---|---|
+| 3.23 | A public HTTPS URL in `README.md` | no hosting account exists yet |
+| 3.24 | Flyway migrates the deployed database on boot | nothing is deployed to read a log from |
+| 3.25 | No secret in deployment configuration | partially evidenced — the hook and CI scan pass, and `docs/deploy.md` uses platform variable references, but there is no deployed configuration to inspect |
+| 3.26 | A booking on the deployed URL is visible in the deployed dashboard | depends on 3.23 |
+| 3.30 | The limiter keys on the client address behind a proxy | **not decidable by any suite here** — every request originates from one address, so keyed-per-address and keyed-globally are indistinguishable. Reasoned in §1 and deliberately not faked |
+
+**What this override is not.** None of the five is a known defect, and none is a criterion that
+failed. Four require a deployment; the fifth requires two hosts. Every criterion that *could* be
+decided by a test was decided by one, and three of those failed on real defects when the tests were
+finally written — the section above says so.
+
+**The condition attached.** Deployment happens from `main` after this merge, and §6 lists the checks
+to run against it — beginning with `CREATE EXTENSION btree_gist`, because criterion 3.1 is not
+honoured in production without it. **If that privilege is withheld, the deployment must be reported
+as unable to honour the guarantee rather than quietly shipped**; the runbook says the same. This
+audit is to be updated on `main` with the outcome either way.
+
+---
+
 ## Verdict
 
 **Not ready to merge — for one reason, and it is not a defect.** Twenty-seven of thirty-two criteria
