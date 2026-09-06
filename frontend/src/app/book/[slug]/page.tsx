@@ -2,17 +2,26 @@
 
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { use, useState } from "react";
-import { Field, buttonClass, inputClass } from "@/components/Field";
+import { BookingConfirmation } from "@/components/booking/BookingConfirmation";
+import { BookingSteps } from "@/components/booking/BookingSteps";
+import { CustomerDetailsForm } from "@/components/booking/CustomerDetailsForm";
+import { SlotGrid } from "@/components/booking/SlotGrid";
 import { FormError } from "@/components/FormError";
-import { ApiError, api, type BookingConfirmation } from "@/lib/api";
+import { Button } from "@/components/ui/Button";
+import { Card } from "@/components/ui/Card";
+import { Input, Select } from "@/components/ui/Input";
+import { SkeletonRows } from "@/components/ui/Skeleton";
+import { ApiError, api, type BookingConfirmation as Confirmation } from "@/lib/api";
 
 /**
- * The public booking page. No account, by design.
+ * The public booking page: no account, no token.
  *
- * <p>The one path that needs care is a slot taken between page load and submit. It is not an edge
- * case — it is what happens whenever two people want the same time, which is the normal way a busy
- * shop fills up. Criterion 3.19: it must be reported and the slots refreshed, never swallowed and
- * never shown as a confirmation.
+ * <p>The path a visitor takes is service, person, date, time, details, confirmation — and the page
+ * shows where they are, because a form of unknown length feels long even when it is short.
+ *
+ * <p>The one case that needs care is a slot taken between page load and submit. It is not an edge
+ * case: it is what happens whenever two people want the same time, which is how a busy shop fills
+ * up. It must be reported and the times refreshed, never swallowed and never shown as a success.
  */
 export default function BookingPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = use(params);
@@ -21,11 +30,8 @@ export default function BookingPage({ params }: { params: Promise<{ slug: string
   const [employeeId, setEmployeeId] = useState("");
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [chosenSlot, setChosenSlot] = useState<string | null>(null);
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
   const [failure, setFailure] = useState<string | null>(null);
-  const [confirmed, setConfirmed] = useState<BookingConfirmation | null>(null);
+  const [confirmed, setConfirmed] = useState<Confirmation | null>(null);
 
   const business = useQuery({
     queryKey: ["public-business", slug],
@@ -33,12 +39,12 @@ export default function BookingPage({ params }: { params: Promise<{ slug: string
     retry: false,
   });
 
-  const service = business.data?.services.find((s) => s.id === serviceId)
-    ?? business.data?.services[0];
+  const service =
+    business.data?.services.find((s) => s.id === serviceId) ?? business.data?.services[0];
   const activeServiceId = service?.id ?? "";
 
-  // Only people who perform the chosen service. Offering the others would let a visitor
-  // pick a combination that can never produce a slot.
+  // Only people who perform the chosen service. Offering the rest would let a visitor pick a
+  // combination that can never produce a time.
   const eligible = (business.data?.employees ?? []).filter((employee) =>
     employee.serviceIds.includes(activeServiceId),
   );
@@ -55,17 +61,17 @@ export default function BookingPage({ params }: { params: Promise<{ slug: string
   });
 
   const book = useMutation({
-    mutationFn: (start: string) =>
+    mutationFn: (details: { name: string; email: string; phone: string }) =>
       api.publicBook(slug, {
         serviceId: activeServiceId,
         employeeId:
           employeeId
-          || availability.data?.slots.find((slot) => slot.start === start)?.employeeIds[0]
+          || availability.data?.slots.find((slot) => slot.start === chosenSlot)?.employeeIds[0]
           || "",
-        startsAt: start,
-        customerName: name.trim(),
-        customerEmail: email.trim(),
-        customerPhone: phone.trim() || undefined,
+        startsAt: chosenSlot ?? "",
+        customerName: details.name,
+        customerEmail: details.email,
+        customerPhone: details.phone || undefined,
       }),
     onSuccess: (result) => {
       setFailure(null);
@@ -74,7 +80,7 @@ export default function BookingPage({ params }: { params: Promise<{ slug: string
     onError: async (error) => {
       if (error instanceof ApiError && error.status === 409) {
         // Someone else took it while this page was open. Say so plainly and refresh, so the
-        // visitor picks from what is actually free rather than retrying into the same wall.
+        // visitor chooses from what is free rather than retrying into the same wall.
         setFailure(
           error.body.code === "SLOT_TAKEN"
             ? "Someone just booked that time. Here are the times still free."
@@ -91,217 +97,193 @@ export default function BookingPage({ params }: { params: Promise<{ slug: string
   });
 
   if (business.isPending) {
-    return <Shell><p role="status">Loading…</p></Shell>;
+    return (
+      <Shell>
+        <div role="status" aria-live="polite" className="flex flex-col gap-4">
+          <p className="text-sm text-ink-subtle">Loading this business…</p>
+          <SkeletonRows rows={2} />
+        </div>
+      </Shell>
+    );
   }
 
   if (business.isError) {
-    // A 404 and a server fault are different things to say to a visitor, and saying the wrong one
-    // costs the business a customer. 3.17 requires *unknown* and *unbookable* to be
-    // indistinguishable from each other; it says nothing about a 500, and telling someone "there
-    // is no business at this address" during a transient outage means they do not come back — the
-    // owner loses a booking they would have had and never learns why.
+    // Criterion 3.17 makes an unknown address and a business that is not open for booking the same
+    // answer, so this page cannot tell them apart either — but a *fault* is a different thing to
+    // say, and saying the wrong one loses the business a customer who would have come back.
     const notFound = business.error instanceof ApiError && business.error.status === 404;
-    return notFound ? (
+    return (
       <Shell>
-        <h1 className="text-2xl font-semibold">Nothing to book here</h1>
-        <p className="mt-2 text-slate-600" role="alert">
-          There is no business taking bookings at this address.
-        </p>
-      </Shell>
-    ) : (
-      <Shell>
-        <h1 className="text-2xl font-semibold">Something went wrong</h1>
-        <p className="mt-2 text-slate-600" role="alert">
-          Could not load this booking page. This is our end, not yours — please try again.
-        </p>
-        <button
-          className="mt-4 rounded-md border border-slate-300 px-4 py-2 text-sm hover:bg-slate-100"
-          type="button"
-          onClick={() => business.refetch()}
-        >
-          Try again
-        </button>
+        <Card className="text-center">
+          <h1 className="text-xl font-semibold text-ink">
+            {notFound ? "Nothing to book here" : "Something went wrong"}
+          </h1>
+          <p className="mx-auto mt-2 max-w-sm text-sm text-ink-muted" role="alert">
+            {notFound
+              ? "There is no business taking bookings at this address."
+              : "Could not load this booking page. This is our end, not yours — please try again."}
+          </p>
+          {notFound ? null : (
+            <div className="mt-5 flex justify-center">
+              <Button variant="secondary" type="button" onClick={() => business.refetch()}>
+                Try again
+              </Button>
+            </div>
+          )}
+        </Card>
       </Shell>
     );
   }
 
   if (confirmed) {
-    const when = new Intl.DateTimeFormat("en-GB", {
-      dateStyle: "full",
-      timeStyle: "short",
-      timeZone: confirmed.timezone,
-    }).format(new Date(confirmed.startsAt));
     return (
       <Shell>
-        <h1 className="text-2xl font-semibold">You are booked</h1>
-        <p className="mt-3 text-slate-700">
-          {confirmed.serviceName} with {confirmed.employeeName}
-        </p>
-        {/* The business's clock, not the visitor's: they are turning up at the shop. */}
-        <p className="mt-1 text-slate-700" data-testid="confirmed-when">
-          {when} ({confirmed.timezone})
-        </p>
-        <p className="mt-4 text-sm text-slate-600">Reference {confirmed.id.slice(0, 8)}</p>
+        <BookingConfirmation confirmation={confirmed} />
       </Shell>
     );
   }
 
-  const slots = availability.data?.slots ?? [];
   const zone = business.data.timezone;
   const formatter = new Intl.DateTimeFormat("en-GB", {
     hour: "2-digit",
     minute: "2-digit",
     timeZone: zone,
   });
+  const format = (instant: string) => formatter.format(new Date(instant));
+  const slots = availability.data?.slots ?? [];
 
   return (
     <Shell>
-      <h1 className="text-2xl font-semibold">{business.data.name}</h1>
-      <p className="mt-1 text-sm text-slate-600">Times shown in {zone}.</p>
+      <header className="flex flex-col gap-3">
+        <div>
+          <h1 className="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
+            {business.data.name}
+          </h1>
+          <p className="mt-1.5 text-sm text-ink-muted">
+            Book in a few taps — no account needed. Times shown in {zone}.
+          </p>
+        </div>
+        <BookingSteps current={chosenSlot ? "Details" : "Time"} />
+      </header>
 
-      <form className="mt-6 flex flex-wrap items-end gap-3">
-        <label className="text-sm">
-          <span className="block text-slate-700">Service</span>
-          <select
-            className={inputClass}
-            value={activeServiceId}
-            onChange={(event) => {
-              setServiceId(event.target.value);
-              setEmployeeId("");
-              setChosenSlot(null);
-            }}
-          >
-            {business.data.services.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.name} ({option.durationMinutes} min)
-              </option>
-            ))}
-          </select>
-        </label>
+      <Card className="flex flex-col gap-4">
+        <div className="grid gap-4 sm:grid-cols-3">
+          <label className="text-sm">
+            <span className="mb-1.5 block font-medium text-ink">Service</span>
+            <Select
+              value={activeServiceId}
+              onChange={(event) => {
+                setServiceId(event.target.value);
+                setEmployeeId("");
+                setChosenSlot(null);
+              }}
+            >
+              {business.data.services.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.name} ({option.durationMinutes} min)
+                </option>
+              ))}
+            </Select>
+          </label>
 
-        <label className="text-sm">
-          <span className="block text-slate-700">With</span>
-          <select
-            className={inputClass}
-            value={employeeId}
-            onChange={(event) => {
-              setEmployeeId(event.target.value);
-              setChosenSlot(null);
-            }}
-          >
-            <option value="">Anyone available</option>
-            {eligible.map((employee) => (
-              <option key={employee.id} value={employee.id}>
-                {employee.name}
-              </option>
-            ))}
-          </select>
-        </label>
+          <label className="text-sm">
+            <span className="mb-1.5 block font-medium text-ink">With</span>
+            <Select
+              value={employeeId}
+              onChange={(event) => {
+                setEmployeeId(event.target.value);
+                setChosenSlot(null);
+              }}
+            >
+              <option value="">Anyone available</option>
+              {eligible.map((employee) => (
+                <option key={employee.id} value={employee.id}>
+                  {employee.name}
+                </option>
+              ))}
+            </Select>
+          </label>
 
-        <label className="text-sm">
-          <span className="block text-slate-700">Date</span>
-          <input
-            className={inputClass}
-            type="date"
-            value={date}
-            onChange={(event) => {
-              setDate(event.target.value);
-              setChosenSlot(null);
-            }}
-          />
-        </label>
-      </form>
+          <label className="text-sm">
+            <span className="mb-1.5 block font-medium text-ink">Date</span>
+            <Input
+              type="date"
+              value={date}
+              onChange={(event) => {
+                setDate(event.target.value);
+                setChosenSlot(null);
+              }}
+            />
+          </label>
+        </div>
+      </Card>
 
-      <section className="mt-6">
+      <section className="flex flex-col gap-4">
         <FormError message={failure} />
 
         {availability.isPending ? (
-          <p className="py-4 text-slate-600" role="status">
-            Finding free times…
-          </p>
+          <div role="status" aria-live="polite" className="flex flex-col gap-3">
+            <p className="text-sm text-ink-subtle">Loading free times…</p>
+            <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6">
+              {Array.from({ length: 12 }, (_, i) => (
+                <div key={i} className="h-11 animate-pulse rounded-md bg-surface-muted" />
+              ))}
+            </div>
+          </div>
         ) : availability.isError ? (
-          <div role="alert">
-            <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-800">
+          <div role="alert" className="flex flex-col items-start gap-3">
+            <p className="rounded-md border border-danger-200 bg-danger-50 px-3.5 py-2.5 text-sm text-danger-700">
               Could not load times.
             </p>
-            <button
-              className="mt-2 text-sm underline"
-              type="button"
-              onClick={() => availability.refetch()}
-            >
+            <Button variant="secondary" size="sm" type="button" onClick={() => availability.refetch()}>
               Try again
-            </button>
+            </Button>
           </div>
         ) : slots.length === 0 ? (
-          <p className="rounded-md border border-dashed border-slate-300 p-6 text-slate-600">
-            No free times on this date. Try another day.
-          </p>
+          <div className="rounded-lg border border-dashed border-border-strong bg-surface px-6 py-10 text-center">
+            <p className="font-medium text-ink">No free times on this date</p>
+            <p className="mx-auto mt-1.5 max-w-md text-sm text-ink-muted">
+              Nobody who performs this service works today, the day is full, or the gaps left are
+              too short for it. Try another day.
+            </p>
+          </div>
         ) : (
-          <ul className="flex flex-wrap gap-2" data-testid="slots">
-            {slots.map((slot) => (
-              <li key={slot.start}>
-                <button
-                  type="button"
-                  aria-pressed={chosenSlot === slot.start}
-                  className={`rounded-md border px-3 py-2 text-sm ${
-                    chosenSlot === slot.start
-                      ? "border-slate-900 bg-slate-900 text-white"
-                      : "border-slate-300 bg-white"
-                  }`}
-                  onClick={() => setChosenSlot(slot.start)}
-                >
-                  {formatter.format(new Date(slot.start))}
-                </button>
-              </li>
-            ))}
-          </ul>
+          <>
+            <p className="text-sm text-ink-muted">
+              {slots.length} time{slots.length === 1 ? "" : "s"} free
+              {service ? ` · ${service.durationMinutes} minutes each` : ""}
+            </p>
+            <SlotGrid
+              slots={slots}
+              selected={chosenSlot}
+              format={format}
+              onSelect={setChosenSlot}
+            />
+          </>
         )}
       </section>
 
       {chosenSlot ? (
-        <form
-          className="mt-6 flex max-w-sm flex-col gap-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            book.mutate(chosenSlot);
-          }}
-        >
-          <h2 className="text-lg font-semibold">
-            Your details for {formatter.format(new Date(chosenSlot))}
-          </h2>
-          <Field label="Name">
-            <input
-              className={inputClass}
-              required
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-            />
-          </Field>
-          <Field label="Email">
-            <input
-              className={inputClass}
-              type="email"
-              required
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-            />
-          </Field>
-          <Field label="Phone (optional)">
-            <input
-              className={inputClass}
-              value={phone}
-              onChange={(event) => setPhone(event.target.value)}
-            />
-          </Field>
-          <button className={buttonClass} type="submit" disabled={book.isPending}>
-            {book.isPending ? "Booking…" : "Confirm booking"}
-          </button>
-        </form>
+        <Card>
+          <CustomerDetailsForm
+            when={`${format(chosenSlot)} on ${new Intl.DateTimeFormat("en-GB", {
+              dateStyle: "full",
+              timeZone: zone,
+            }).format(new Date(chosenSlot))}`}
+            pending={book.isPending}
+            failure={null}
+            onSubmit={(details) => book.mutate(details)}
+          />
+        </Card>
       ) : null}
     </Shell>
   );
 }
 
 function Shell({ children }: { children: React.ReactNode }) {
-  return <main className="mx-auto w-full max-w-2xl flex-1 px-6 py-12">{children}</main>;
+  return (
+    <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-4 py-8 sm:px-6 sm:py-12">
+      {children}
+    </main>
+  );
 }
