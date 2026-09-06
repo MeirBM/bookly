@@ -141,6 +141,14 @@ frontend rather than a missing variable.
 Back on Railway, set `CORS_ALLOWED_ORIGINS` to the Vercel origin — scheme and host, **no trailing
 slash and no path**, e.g. `https://bookly-xyz.vercel.app` — and redeploy the backend.
 
+**An origin is scheme + host + port.** `bookly-pearl.vercel.app` is a hostname, not an origin, and
+will never match the `Origin: https://bookly-pearl.vercel.app` a browser actually sends — the
+application logs a warning naming any entry without a scheme. Check the startup line:
+
+```
+CORS allows origins: [https://bookly-pearl.vercel.app, http://localhost:3000]
+```
+
 The value is a list, so both origins can be allowed at once while you are still working locally:
 
 ```

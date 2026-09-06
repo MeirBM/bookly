@@ -145,6 +145,18 @@ public class SecurityConfig {
         // startup turns "the site is broken" into "the origin list is not what I thought".
         log.info("CORS allows origins: {}", origins);
 
+        // A bare hostname is the easy mistake, and it fails as completely as a typo: the browser
+        // sends "Origin: https://host", which a value of "host" can never match. Warned rather
+        // than corrected, because guessing http versus https for someone would be choosing their
+        // security posture for them.
+        origins.stream()
+                .filter(origin -> !origin.equals("*"))
+                .filter(origin -> !origin.startsWith("http://") && !origin.startsWith("https://"))
+                .forEach(origin -> log.warn(
+                        "CORS origin '{}' has no scheme and will never match a browser request; "
+                                + "an origin is scheme + host + port, e.g. https://{}",
+                        origin, origin));
+
         CorsConfiguration configuration = new CorsConfiguration();
         configuration.setAllowedOrigins(origins);
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
