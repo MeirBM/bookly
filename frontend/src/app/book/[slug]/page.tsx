@@ -95,14 +95,32 @@ export default function BookingPage({ params }: { params: Promise<{ slug: string
   }
 
   if (business.isError) {
-    // 3.17: an address that does not exist and a business that is not open for booking are
-    // deliberately the same answer, so this page cannot tell them apart either.
-    return (
+    // A 404 and a server fault are different things to say to a visitor, and saying the wrong one
+    // costs the business a customer. 3.17 requires *unknown* and *unbookable* to be
+    // indistinguishable from each other; it says nothing about a 500, and telling someone "there
+    // is no business at this address" during a transient outage means they do not come back — the
+    // owner loses a booking they would have had and never learns why.
+    const notFound = business.error instanceof ApiError && business.error.status === 404;
+    return notFound ? (
       <Shell>
         <h1 className="text-2xl font-semibold">Nothing to book here</h1>
         <p className="mt-2 text-slate-600" role="alert">
           There is no business taking bookings at this address.
         </p>
+      </Shell>
+    ) : (
+      <Shell>
+        <h1 className="text-2xl font-semibold">Something went wrong</h1>
+        <p className="mt-2 text-slate-600" role="alert">
+          Could not load this booking page. This is our end, not yours — please try again.
+        </p>
+        <button
+          className="mt-4 rounded-md border border-slate-300 px-4 py-2 text-sm hover:bg-slate-100"
+          type="button"
+          onClick={() => business.refetch()}
+        >
+          Try again
+        </button>
       </Shell>
     );
   }

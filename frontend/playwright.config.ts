@@ -45,6 +45,11 @@ export default defineConfig({
         // no gate — it stops one control from masking every other assertion.
         BOOKLY_SECURITY_RATELIMIT_MAXREQUESTS: "100000",
         BOOKLY_SECURITY_RATELIMIT_APIMAXREQUESTS: "100000",
+        // The public surface has the strictest limit by design (criterion 3.15), and the booking
+        // tests drive it hardest - availability on every date change, plus out-of-band bookings to
+        // stage the race in 3.19. Omitting this made the suite's determinism depend on which
+        // backend happened to be listening on :8080.
+        BOOKLY_SECURITY_RATELIMIT_PUBLICMAXREQUESTS: "100000",
       },
     },
     {

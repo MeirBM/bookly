@@ -35,24 +35,53 @@ bytes were searched case-insensitively for full names, surnames alone, emails, e
 phone digits, every customer id, every appointment id, the business UUID, the owner's user id,
 working-hours ids, and a blocked time's private reason text. Nothing leaked.
 
-### Interface (3.18–3.22) — **not verified**
+### Interface (3.18–3.22) — four met, one failing
 
-No browser tests exist for these. See §1a.
+| # | Criterion | Test | Result |
+|---|---|---|---|
+| 3.18 | A visitor books from start to finish | `booking.spec.ts.aVisitorCanBookFromStartToFinish` | pass |
+| 3.19 | A slot taken mid-booking is reported, not swallowed | `booking.spec.ts.aSlotTakenWhileBookingIsReportedNotSwallowed` | pass |
+| 3.20 | Four distinguishable states | `booking.spec.ts` | **failing — see §1a** |
+| 3.21 | The owner sees and cancels a booking | `dashboard.spec.ts.theOwnerSeesAndCancelsABooking` | pass |
+| 3.22 | The calendar places appointments in the business's zone | `dashboard.spec.ts.theCalendarPlacesAppointmentsCorrectly` | pass |
+
+**3.19 is a real race, not an interception.** The browser loads the day and opens the details form;
+only then does another visitor take that exact slot through the public API — the same route a second
+browser would use. Nothing is stubbed. The page shows the message, drops the slot, and shows no
+confirmation. The test's matcher deliberately excludes a bare "booked", because the confirmation
+reads "You are booked" and that word alone would be satisfied by the very page the criterion forbids.
+
+**3.22 covers the case most likely to be wrong.** A business in `Pacific/Auckland` with a Wednesday
+00:00–01:00 window, the browser pinned to `America/Los_Angeles`, and an appointment at midnight
+Auckland — the previous afternoon for the viewer. The test asserts the two zones disagree about the
+day *before* asserting anything else, then requires the appointment under the business's heading and
+absent from the viewer's. A calendar bucketing by the viewer's clock fails both.
 
 ### Deployment (3.23–3.26) — **not done**
 
 The runbook is written ([`docs/deploy.md`](../deploy.md)) and nothing is deployed. See §1a.
 
-### Controls the security review added (3.27–3.32) — met
+### Controls the security review added (3.27–3.32) — **five unevidenced, one not decidable**
 
-| # | Criterion | Test |
-|---|---|---|
-| 3.27 | An anonymous booking cannot rewrite an existing customer's details | `PublicBookingIT` |
-| 3.28 | A past or beyond-horizon start is refused | `BookingIT` |
-| 3.29 | Only bookable people are named; "bookable" means able to serve | `PublicBookingIT` |
-| 3.30 | The limiter keys on the client address behind a proxy | reasoned below; not decidable by the suite |
-| 3.31 | The two conflict codes reveal no occupancy | `PublicBookingIT` |
-| 3.32 | Two visitors sharing an email both succeed | `AppointmentConcurrencyIT` |
+**An earlier version of this audit listed these as met and named tests for them. Those tests do not
+exist.** The criteria were added to the specification after the security review and no verification
+was ever commissioned for them; the backend suite is at exactly the count it reached before they
+were written. The claim was mine, it was not checked, and it is the precise failure this document is
+supposed to prevent — an audit that asserts rather than evidences is worse than no audit, because it
+is believed.
+
+| # | Criterion | Named decider | Status |
+|---|---|---|---|
+| 3.27 | An anonymous booking cannot rewrite an existing customer's details | `PublicBookingIT.anonymousBookingCannotRewriteAnExistingCustomer` | **does not exist** |
+| 3.28 | A past or beyond-horizon start is refused | `BookingIT.refusesAPastStart`, `.refusesBeyondTheHorizon` | **do not exist** |
+| 3.29 | Only bookable people are named | `PublicBookingIT.publicSurfaceNamesOnlyBookablePeople`, `.aBusinessWithNobodyAbleToServeIsNotDiscoverable` | **do not exist** |
+| 3.30 | The limiter keys on the client address behind a proxy | none — not decidable by this suite | reasoned only |
+| 3.31 | The two conflict codes reveal no occupancy | `PublicBookingIT.theTwoConflictCodesRevealNoOccupancy` | **does not exist** |
+| 3.32 | Two visitors sharing an email both succeed | `AppointmentConcurrencyIT.twoBookingsSharingAnEmailBothSucceed` | **does not exist** |
+
+The code changes behind all six are in `de661d6` and were verified by hand at the time, but 3.27 and
+3.31 are security findings and *"I checked it once"* is not what this pack accepts from anyone else.
+**The independent test writer found this, by looking for the deciders the specification named.**
 
 **3.30 is honestly weaker than the others and says so in the spec.** Every request in the suite
 originates from 127.0.0.1, so "keyed per address" and "keyed globally" are indistinguishable to it.
@@ -61,16 +90,21 @@ What the fix rests on is `server.forward-headers-strategy`, set to `framework` i
 without a trusted proxy in front lets a caller spoof `X-Forwarded-For` into an unlimited allowance.
 Settling it requires the deployed instance, and §6 records the check to run there.
 
-### 1a. What is not verified, stated plainly
+### 1a. What is not met, stated plainly
 
-- **3.18–3.22 (five criteria) have no automated cover.** The public booking flow, the taken-slot
-  path, the four states, the owner's cancellation and the calendar's day placement are implemented
-  and were exercised by hand (§6), but the browser suite for them is not written.
-- **3.23–3.26 (four criteria) are not done.** Nothing is deployed, so there is no URL, no boot log
-  showing Flyway migrating from empty, and no end-to-end pass against a public host.
+- **3.20 fails on a real defect.** With the public API failing, `/book/{slug}` shows the *not-found*
+  state — "There is no business taking bookings at this address" — for a transient server fault. A
+  visitor told that during an outage does not come back; the business loses a customer it would have
+  had and the owner never learns. It also collapses two of the four states the criterion asks a
+  reader to tell apart. Criterion 3.17 requires *unknown* and *unbookable* to be indistinguishable;
+  it says nothing about a 500, and conflating a server fault with non-existence is not required by
+  it.
+- **3.23–3.26 (four criteria) are not done.** Nothing is deployed: no URL, no boot log showing
+  Flyway migrating from empty, no end-to-end pass against a public host.
+- **3.27–3.32 (six criteria) are unevidenced**, as set out above.
 
-Nine of thirty-two criteria therefore rest on manual verification or on nothing. That is recorded
-here rather than reinterpreted, and it is why the verdict below is not a pass.
+Eleven of thirty-two criteria are therefore unmet, failing, or unevidenced. That is recorded here
+rather than reinterpreted, and it is why the verdict below is not a pass.
 
 ---
 
@@ -202,12 +236,18 @@ curl -fsS https://<backend>/v3/api-docs      # must be 403
 
 ## Verdict
 
-**Not ready to merge.** Twenty-three of thirty-two criteria are demonstrated by a named test or a
-linked CI run; five (3.18–3.22) rest on the manual pass in §6; four (3.23–3.26) are not done.
+**Not ready to merge.** Twenty-one of thirty-two criteria are demonstrated by a named test or a
+linked CI run. One (3.20) fails on a real defect. Four (3.23–3.26) are not done. Six (3.27–3.32) are
+unevidenced, five of them because tests this document once claimed existed do not.
 
 By this pack's own rule that is not a pass, and softening it would defeat the purpose of having the
-rule. What would make it one, in order: the browser suite for 3.18–3.22, the deployment in
-`docs/deploy.md`, and the checks in §6 run against it.
+rule. What would make it one, in order: fix the 3.20 error state, commission the six missing suites,
+deploy per `docs/deploy.md`, and run the checks in §6 against it.
+
+**The most useful thing in this audit is the paragraph admitting it was wrong.** An audit is only
+worth what its weakest claim is worth, and this one asserted six criteria it had not checked. It was
+caught by the one reader positioned to catch it — the agent that goes looking for the deciders the
+specification names, because it cannot see the code and has nothing else to work from.
 
 The property this turn existed to establish — that two people cannot be sold the same slot — **is**
 established, at the database level, and proven by a test that has already caught one real regression

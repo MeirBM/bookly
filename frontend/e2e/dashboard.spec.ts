@@ -1,4 +1,13 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import {
+  bookViaPublicApi,
+  localTimeIn,
+  newOwner as newBookingOwner,
+  ownersAppointments,
+  publicAvailability,
+  seedBookable,
+  signIn as signInAsBookingOwner,
+} from "./support/fixtures";
 
 /**
  * Turn-1 criterion 1.17: the frontend redirects an unauthenticated visit to /dashboard to /login.
@@ -27,30 +36,7 @@ const SETTLE = 15_000;
  */
 const NO_REDIRECT_WINDOW = 6_000;
 
-const DASHBOARD = /\/dashboard(\/|\?|#|$)/;
 const LOGIN = /\/login(\/|\?|#|$)/;
-
-/**
- * A session the browser has no reason to consider stale: a well-formed JWT whose exp is an hour
- * away. The signature is meaningless — nothing in the browser can verify it, and the criterion is
- * about session state, not about cryptography. Building it this way keeps the test honest whether
- * the app treats the access token as an opaque string or decodes it to check expiry.
- */
-function seededSession() {
-  const encode = (value: object) =>
-    Buffer.from(JSON.stringify(value)).toString("base64url");
-  const header = encode({ alg: "HS256", typ: "JWT" });
-  const payload = encode({
-    sub: "11111111-1111-1111-1111-111111111111",
-    iss: "bookly",
-    exp: Math.floor(Date.now() / 1000) + 3600,
-  });
-  return {
-    accessToken: `${header}.${payload}.c2lnbmF0dXJlLW5vdC12ZXJpZmllZC1pbi10aGUtYnJvd3Nlcg`,
-    refreshToken: "11111111-2222-3333-4444-555555555555", // allow-secret: browser test fixture
-    expiresInSeconds: 3600,
-  };
-}
 
 async function seedSession(page: Page, session: unknown) {
   await page.addInitScript(
@@ -59,14 +45,6 @@ async function seedSession(page: Page, session: unknown) {
     },
     [SESSION_KEY, JSON.stringify(session)] as const,
   );
-}
-
-/** Resolves true if the browser navigated to /login within the window, false if it stayed put. */
-async function wasBouncedToLogin(page: Page): Promise<boolean> {
-  return page
-    .waitForURL(LOGIN, { timeout: NO_REDIRECT_WINDOW })
-    .then(() => true)
-    .catch(() => false);
 }
 
 test.describe("dashboard access", () => {
@@ -162,6 +140,7 @@ test.describe("dashboard access", () => {
  * ------------------------------------------------------------------------- */
 
 const API = process.env.E2E_API_URL ?? "http://localhost:8080";
+
 const PASSWORD = "correct-horse-battery-staple-1"; // allow-secret: browser test fixture
 
 /** Local times the engine offers, in the two formats a browser commonly renders. */
@@ -273,6 +252,35 @@ async function chooseService(page: Page, serviceName: string) {
 async function settledText(page: Page): Promise<string> {
   await expect(page.getByText(/loading/i)).toHaveCount(0, { timeout: SETTLE });
   return page.locator("body").innerText();
+}
+
+/** The day heading the calendar prints for an instant, in the given zone: "Wed 21 Oct". */
+function dayLabelIn(instant: string, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  }).format(new Date(instant));
+}
+
+/**
+ * Splits the calendar's text into what sits under each day heading.
+ *
+ * <p>Bucketing by the visible headings rather than by DOM structure keeps this test about what a
+ * reader sees: whichever way the week is laid out, the appointment has to appear beneath the right
+ * day's label.
+ */
+function dayBuckets(text: string): Record<string, string> {
+  const heading = /\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{1,2}\s+[A-Za-z]+\b/g;
+  const labels = [...text.matchAll(heading)];
+  const buckets: Record<string, string> = {};
+  labels.forEach((match, index) => {
+    const from = (match.index ?? 0) + match[0].length;
+    const to = index + 1 < labels.length ? labels[index + 1].index ?? text.length : text.length;
+    buckets[match[0]] = text.slice(from, to);
+  });
+  return buckets;
 }
 
 const ERROR_TEXT = /could not|couldn't|went wrong|failed|try again/i;
@@ -538,5 +546,189 @@ test.describe("dashboard screens", () => {
       none,
       "no availability must be stated, not left as a blank area the reader has to interpret",
     ).toMatch(/no (available |free )?(slots|times|availability)|nothing available|none available|no times/i);
+  });
+
+  /**
+   * 1.17's other half, which was left untested when the synthetic-session fixture it used became
+   * stale: a visitor who *is* signed in must not be bounced. The session here is one the server
+   * actually issued, so a redirect to /login can only mean the page decided before it had read
+   * storage — which is the defect this guards, and the reason the original test existed.
+   */
+  test("keeps a visitor with a real session on /dashboard", async ({ page, request }) => {
+    const owner = await newOwner(request);
+    const seeded = await seed(request, owner, {});
+    await signIn(page, owner);
+
+    await page.goto(`/dashboard/${seeded.businessId}`);
+
+    const bounced = await page
+      .waitForURL(LOGIN, { timeout: NO_REDIRECT_WINDOW })
+      .then(() => true)
+      .catch(() => false);
+    expect(
+      bounced,
+      "a visitor holding a session the server issued was sent to the login form; a redirect " +
+        "decided before stored session state has been read bounces signed-in users on every reload",
+    ).toBe(false);
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: SETTLE });
+  });
+
+  /** 3.21 — the owner sees a booking made on the public page, and can cancel it. */
+  test("theOwnerSeesAndCancelsABooking", async ({ page, request }) => {
+    const owner = await newBookingOwner(request);
+    const seeded = await seedBookable(request, owner, { durationMinutes: 30 });
+    const date = "2026-10-15";
+
+    // A visitor books on the public page — the same route a browser would have used.
+    const availability = await publicAvailability(request, seeded.slug, seeded.serviceId, date);
+    expect(availability.slots.length, "the seeded day offers times").toBeGreaterThan(0);
+    const booked = availability.slots[0].start;
+    const bookedLabel = localTimeIn(booked, availability.timezone);
+    const taken = await bookViaPublicApi(request, seeded.slug, {
+      serviceId: seeded.serviceId,
+      employeeId: seeded.employeeId,
+      startsAt: booked,
+      name: "Priya Visitor",
+    });
+    expect(taken.status(), "the public booking").toBe(201);
+
+    await signInAsBookingOwner(page, owner);
+    await page.goto(`/dashboard/${seeded.businessId}/appointments`);
+    const dateInputs = page.locator("input[type=date]");
+    await dateInputs.nth(0).fill("2026-10-01");
+    await dateInputs.nth(1).fill("2026-10-31");
+    await expect(page.getByText(/priya visitor/i), "the owner sees who booked")
+      .toBeVisible({ timeout: SETTLE });
+
+    const before = await page.locator("body").innerText();
+    expect(before, "and what they booked").toContain(seeded.serviceName);
+    expect(before, "and with whom").toContain(seeded.employeeName);
+    expect(
+      before,
+      `and when, on the business's clock (${bookedLabel} in ${seeded.timezone}) rather than the ` +
+        "viewer's",
+    ).toContain(bookedLabel);
+    expect(before, "a live booking reads as live").toMatch(/confirmed|pending/i);
+
+    await page.getByRole("button", { name: /^cancel$/i }).first().click();
+
+    await expect
+      .poll(
+        async () => {
+          const list = await ownersAppointments(request, owner, seeded.businessId, "2026-10-01", "2026-10-31");
+          return list[0]?.status;
+        },
+        {
+          message:
+            "cancelling in the dashboard must actually cancel the appointment — the owner is the " +
+            "one person who has to be able to undo a booking, and a button that only looks like " +
+            "it worked leaves a customer expected who is not coming",
+          timeout: SETTLE,
+        },
+      )
+      .toBe("CANCELLED");
+
+    const after = await page.locator("body").innerText();
+    expect(after, "the screen must not still present it as a live booking").not.toMatch(/confirmed|pending/i);
+    expect(after, "and the page must visibly change, not silently succeed").not.toEqual(before);
+  });
+
+  /**
+   * 3.22 — the calendar shows a week, places each appointment in the right day and time in the
+   * business's zone, and shows an empty week as seven labelled days.
+   *
+   * <p>Staged to catch the one bug most likely to be there: an appointment at midnight in Auckland
+   * is the previous afternoon in Los Angeles, which is where this browser's clock is set. A
+   * calendar that bucketed by the viewer's clock would put it on the wrong day *and* at the wrong
+   * time, and would look perfectly correct to anyone testing from Auckland.
+   */
+  test("theCalendarPlacesAppointmentsCorrectly", async ({ page, request }) => {
+    const owner = await newBookingOwner(request);
+    const seeded = await seedBookable(request, owner, {
+      durationMinutes: 30,
+      timezone: "Pacific/Auckland",
+      // Midnight on Wednesday, ordinary hours on Thursday.
+      hours: [
+        { weekday: "WEDNESDAY", start: "00:00:00", end: "01:00:00" },
+        { weekday: "THURSDAY", start: "09:00:00", end: "17:00:00" },
+      ],
+    });
+    const wednesday = "2026-10-21";
+
+    // The first slot of a 00:00-01:00 window is midnight itself. Taken from the engine rather than
+    // computed here, so the zone offset on the day is the tzdb's answer and not mine.
+    const availability = await publicAvailability(request, seeded.slug, seeded.serviceId, wednesday);
+    expect(availability.slots.length, "the midnight window offers times").toBeGreaterThan(0);
+    const midnight = availability.slots[0].start;
+    expect(
+      localTimeIn(midnight, seeded.timezone),
+      "the fixture is only interesting if the appointment really is at midnight there",
+    ).toBe("00:00");
+    const businessDayLabel = dayLabelIn(midnight, seeded.timezone);
+    const viewerDayLabel = dayLabelIn(midnight, "America/Los_Angeles");
+    expect(
+      viewerDayLabel,
+      "the stage only tests anything if the two clocks disagree about the day",
+    ).not.toBe(businessDayLabel);
+
+    const booked = await bookViaPublicApi(request, seeded.slug, {
+      serviceId: seeded.serviceId,
+      employeeId: seeded.employeeId,
+      startsAt: midnight,
+      name: "Midnight Customer",
+    });
+    expect(booked.status(), "the midnight booking").toBe(201);
+
+    await signInAsBookingOwner(page, owner);
+    await page.goto(`/dashboard/${seeded.businessId}/calendar`);
+    await expect(page.getByText(/times shown in/i)).toBeVisible({ timeout: SETTLE });
+
+    // Walk forward to the week that holds it. Bounded, and it asserts it arrived.
+    let reached = false;
+    for (let week = 0; week < 12 && !reached; week++) {
+      if ((await page.locator("body").innerText()).includes(businessDayLabel)) {
+        reached = true;
+        break;
+      }
+      await page.getByRole("button", { name: /next week/i }).click();
+      await page.waitForTimeout(400);
+    }
+    expect(reached, `the calendar must be able to show the week containing ${businessDayLabel}`).toBe(true);
+
+    const days = dayBuckets(await page.locator("body").innerText());
+    expect(
+      Object.keys(days).length,
+      "a week is seven days, labelled, whatever is in them: %s" + JSON.stringify(Object.keys(days)),
+    ).toBe(7);
+    expect(
+      days[businessDayLabel],
+      `the appointment belongs under ${businessDayLabel} — the day it is on the business's clock`,
+    ).toContain("Midnight Customer");
+    expect(
+      days[businessDayLabel],
+      `and at 00:00, the time the customer chose, not ${localTimeIn(midnight, "America/Los_Angeles")} ` +
+        "which is what the same instant reads as in this browser's zone",
+    ).toContain("00:00");
+    if (days[viewerDayLabel] !== undefined) {
+      expect(
+        days[viewerDayLabel],
+        `${viewerDayLabel} is where a calendar bucketing by the viewer's clock would have put it`,
+      ).not.toContain("Midnight Customer");
+    }
+
+    // An empty week is still a week.
+    await page.getByRole("button", { name: /next week/i }).click();
+    await expect(page.getByText(/no appointments this week|nothing booked/i))
+      .toBeVisible({ timeout: SETTLE });
+    const emptyWeek = dayBuckets(await page.locator("body").innerText());
+    expect(
+      Object.keys(emptyWeek).length,
+      "an empty week must still show seven labelled days: a blank page cannot be told apart from " +
+        "a page that failed to load",
+    ).toBe(7);
+    expect(
+      Object.values(emptyWeek).join(""),
+      "and it must say it is empty rather than leaving the reader to infer it",
+    ).not.toContain("Midnight Customer");
   });
 });
