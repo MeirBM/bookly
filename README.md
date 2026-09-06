@@ -119,25 +119,20 @@ drifts.
 |---|---|---|
 | 1 | Foundation, authentication, tenant isolation | complete — [audit](docs/audit/turn-1.md) |
 | 2 | Services, employees, working hours, availability engine | complete — [audit](docs/audit/turn-2.md) |
-| 3 | Booking, concurrency, public booking page, deployment | [audit](docs/audit/turn-3.md) · 30/32 — the frontend is not deployed |
+| 3 | Booking, concurrency, public booking page, deployment | complete — [audit](docs/audit/turn-3.md) · 32/32 |
 
-Deployed API: **https://bookly-production-a85b.up.railway.app** — backend only for now; the
-frontend deployment is in progress.
+**Live at https://bookly-pearl.vercel.app** — open `/book/{slug}` for a business and book a time,
+no account needed. The API, PostgreSQL and Redis run at
+https://bookly-production-a85b.up.railway.app.
 
-**To use Bookly today**, run the frontend against the live API:
+To try the whole loop: register, create a business, add a service and an employee, link them and
+give the employee working hours. Then open `/book/{slug}` in a private window, book a time, and
+watch it appear in the dashboard's appointment list and calendar while the slot disappears from the
+public page.
 
-```bash
-cd frontend
-NEXT_PUBLIC_API_URL=https://bookly-production-a85b.up.railway.app npm run dev
-```
-
-Open `http://localhost:3000`, register, create a business, add a service and an employee, link
-them and give the employee working hours. Then open `/book/{slug}` — in a private window, to see
-it as a customer with no account — and book a time. It appears in the dashboard's appointment list
-and calendar, and the slot disappears from the public page.
-
-That works because the deployed API allows `http://localhost:3000` by default and refuses other
-origins.
+The deployment runbook is [`docs/deploy.md`](docs/deploy.md). It is worth reading before repeating
+this: five attempts failed first, each for a different reason, and every one of them was a
+configuration value wrong in a way no error message mentioned.
 
 Public booking page for a business is at `/book/{slug}`; the API is the same host.
 The deployment runbook, including three failures worth reading before repeating them,

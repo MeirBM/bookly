@@ -57,33 +57,22 @@ Auckland — the previous afternoon for the viewer. The test asserts the two zon
 day *before* asserting anything else, then requires the appointment under the business's heading and
 absent from the viewer's. A calendar bucketing by the viewer's clock fails both.
 
-### Deployment (3.23–3.26) — **the backend only. 3.26 is not met.**
+### Deployment (3.23–3.26) — met, and verified in a browser
 
-**https://bookly-production-a85b.up.railway.app** — backend, PostgreSQL and Redis on Railway.
-**The frontend is not deployed.**
+- **Application:** https://bookly-pearl.vercel.app (Vercel)
+- **API, PostgreSQL, Redis:** https://bookly-production-a85b.up.railway.app (Railway)
 
-**A correction, and it is the second time this document has overclaimed.** An earlier version of
-this section said all four deployment criteria were met. They are not. Everything below was
-verified by calling the API directly with `curl`; there is no deployed browser interface, so:
-
-- **3.26 is not met.** It says a booking made against the deployed URL is visible in the *deployed
-  dashboard*. There is no deployed dashboard. What was verified is that a booking made against the
-  deployed API is visible through the deployed API — a weaker statement, and not the one the
-  criterion makes.
-- **3.23 is met for the API and not for the application.** A person cannot use Bookly at that URL.
-  They can run the frontend locally against it — the deployed backend allows `http://localhost:3000`
-  and refuses other origins — but that is a developer's arrangement, not a deployment.
-
-The failure was mine and it was the same shape as the earlier one: asserting a criterion from
-adjacent evidence rather than from the evidence the criterion names. Verifying the API and calling
-it the application is exactly the substitution this pack exists to catch.
+**An earlier version of this section claimed these were met when only the API was deployed**, having
+verified everything with `curl` and called it the application. That was the second overclaim in this
+document, and it is left recorded below rather than quietly replaced. What follows is the evidence
+the criteria actually name.
 
 | # | Criterion | Evidence |
 |---|---|---|
-| 3.23 | A public HTTPS URL, named in `README.md` | met for the API: `/actuator/health` → `200 {"status":"UP"}`. Not met for the application a person uses |
-| 3.24 | Flyway migrates from empty on boot, no manual step | the exclusion constraint is enforced in production (below), which only exists if V5 applied to a database V1 had created |
+| 3.23 | A public HTTPS URL, named in `README.md` | both hosts live; `/actuator/health` → `200 {"status":"UP"}`, and the booking page renders at `/book/{slug}` |
+| 3.24 | Flyway migrates from empty on boot, no manual step | the deploy log: `Database: jdbc:postgresql://postgres.railway.internal:5432/railway (PostgreSQL 18.6)` then `Current version of schema "public": 5` — all five migrations applied, no manual step |
 | 3.25 | No secret in deployment configuration | `/v3/api-docs` → `401`, not published; every value is a Railway `${{...}}` reference or a key generated outside the repository; the hook and the full-history scan pass |
-| 3.26 | A booking on the deployed URL is visible in the deployed dashboard | **not met** — verified through the API, but no dashboard is deployed |
+| 3.26 | A booking on the deployed URL is visible in the deployed dashboard | **a real browser, against both deployments**: booked 09:00 on the public page as an anonymous visitor, then signed the owner in on the deployed site and found "Rina Cohen / Signature Cut" in the dashboard's appointment list **and** in the calendar. Checked on the page, not through the API that backs it — the API check alone is the substitution this document made once already |
 
 **The loop, run against the live URL:** register → login → business → service → employee →
 working hours → the public page read anonymously → 10 slots for a 45-minute service on a
@@ -357,19 +346,21 @@ the constraint alone can produce.
 
 ## Verdict
 
-**Thirty of thirty-two criteria met.** Twenty-seven by a named test or a linked CI run; three
-against the live deployment. **3.26 is not met and 3.23 is met only for the API**, because the
-frontend is not deployed — a person cannot use Bookly at the published URL, only call it.
+**All thirty-two criteria met.** Twenty-seven by a named test or a linked CI run; five against the
+live deployment, including a booking made in a real browser on the deployed site and read back from
+the deployed dashboard.
 
-Turn 3 merged before any of the deployment criteria were met, under an override the owner accepted
-explicitly. The override's condition is discharged — `btree_gist` exists in production and the
-deployed instance refuses a duplicate booking — but the override itself is only partly discharged,
-and this document said otherwise for a while.
+Turn 3 merged before any deployment criterion was met, under an override the owner accepted
+explicitly. That override is now fully discharged, condition included: `btree_gist` exists in
+production and the deployed instance refuses a duplicate booking.
 
-**Twice now this audit has claimed criteria it had not checked**: six unwritten test suites earlier,
-and the deployed frontend here. Both times the claim came from adjacent evidence — tests that
-*should* have existed, an API that *is* deployed — rather than from what the criterion names. That
-pattern is worth more to a reader than any single passing row.
+**Twice this audit claimed criteria it had not checked** — six unwritten test suites, then a
+deployed frontend that did not exist. Both claims came from adjacent evidence rather than from what
+the criterion names: tests that *should* have existed, an API that *was* deployed. Both were caught
+by someone else: the first by the agent that goes looking for the deciders a specification names,
+the second by the project owner asking where the frontend was. **That pattern is worth more to a
+reader than any passing row above it**, and it is why 3.26 above was finally closed by driving a
+browser rather than by calling the API that backs it.
 
 **The most useful thing in this audit is the paragraph admitting it was wrong.** It asserted six
 criteria it had not checked; three of those six then failed on real defects, one of them a diary
