@@ -2,17 +2,20 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
+import { BrandMark } from "@/components/layout/BrandMark";
+import { Button } from "@/components/ui/Button";
+import { SkeletonRows } from "@/components/ui/Skeleton";
 import { useAuth } from "@/lib/auth-context";
 
 /**
- * Criterion 1.17: an unauthenticated visitor to /dashboard is sent to /login.
+ * The signed-in shell.
  *
- * <p>This is a convenience, not a control. It hides a screen; it does not protect data. Every
- * tenant-scoped response is authorised on the server by TenantGuard, because the browser cannot be
- * trusted — its code runs in the open and anyone can skip this component entirely.
+ * <p>The redirect is a convenience, not a control. It hides a screen; it does not protect data.
+ * Every tenant-scoped response is authorised on the server, because the browser runs in the open
+ * and anyone can skip this component entirely.
  *
- * <p>The redirect waits for `ready`. Without that wait it fires on the first paint, before
- * localStorage has been read, and bounces a signed-in user to the login page on every reload.
+ * <p>It waits for `ready`. Without that wait it fires on the first paint, before localStorage has
+ * been read, and bounces a signed-in visitor to the login page on every reload.
  */
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -25,22 +28,35 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }, [ready, tokens, router]);
 
   if (!ready) {
-    return <p className="p-8 text-slate-600">Loading…</p>;
+    return (
+      <div role="status" aria-live="polite" className="mx-auto w-full max-w-3xl px-4 py-10">
+        <p className="text-sm text-ink-subtle">Loading…</p>
+        <div className="mt-4">
+          <SkeletonRows rows={2} />
+        </div>
+      </div>
+    );
   }
 
   if (!tokens) {
-    return <p className="p-8 text-slate-600">Redirecting to sign in…</p>;
+    return (
+      <p role="status" className="mx-auto w-full max-w-3xl px-4 py-10 text-sm text-ink-subtle">
+        Redirecting to sign in…
+      </p>
+    );
   }
 
   return (
     <div className="flex min-h-full flex-1 flex-col">
-      <header className="flex items-center justify-between border-b border-slate-200 bg-white px-6 py-3">
-        <span className="font-semibold">Bookly</span>
-        <button className="text-sm underline" type="button" onClick={signOut}>
-          Sign out
-        </button>
+      <header className="sticky top-0 z-10 border-b border-border bg-surface/85 backdrop-blur">
+        <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
+          <BrandMark href="/dashboard" />
+          <Button variant="ghost" size="sm" type="button" onClick={signOut}>
+            Sign out
+          </Button>
+        </div>
       </header>
-      <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-8">{children}</main>
+      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 sm:py-8">{children}</main>
     </div>
   );
 }

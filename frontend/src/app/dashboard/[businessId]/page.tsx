@@ -4,12 +4,18 @@ import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { use } from "react";
 import { AsyncSection } from "@/components/AsyncSection";
+import { Card } from "@/components/ui/Card";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { useBusiness } from "@/lib/use-business";
 
 /**
- * Overview. Its real job is criterion 2.21: a business with nothing configured is told what to do
- * next, in order, rather than shown three empty tables and left to infer the sequence.
+ * Overview.
+ *
+ * <p>Its real job is to answer "what do I do next?". Bookly can only offer a time once it knows
+ * what is sold, who performs it and when they work, and a new business has none of those — so the
+ * screen shows the three steps in order rather than three empty tables and an inference.
  */
 export default function BusinessOverviewPage({
   params,
@@ -19,6 +25,7 @@ export default function BusinessOverviewPage({
   const { businessId } = use(params);
   const { tokens } = useAuth();
   const token = tokens?.accessToken ?? "";
+  const business = useBusiness(businessId);
 
   const setup = useQuery({
     queryKey: ["setup", businessId],
@@ -33,32 +40,41 @@ export default function BusinessOverviewPage({
   });
 
   return (
-    <section className="flex flex-col gap-4">
-      <h1 className="text-2xl font-semibold">Overview</h1>
+    <div className="flex flex-col gap-8">
+      <PageHeader
+        title={business.data?.name ?? "Overview"}
+        description={
+          business.data ? (
+            <>
+              Public booking page:{" "}
+              <span className="font-medium text-ink">/book/{business.data.slug}</span> · times shown
+              to customers in {business.data.timezone}
+            </>
+          ) : undefined
+        }
+      />
 
-      <AsyncSection
-        query={setup}
-        label="this business"
-        isEmpty={() => false}
-        empty={null}
-      >
+      <AsyncSection query={setup} label="this business" isEmpty={() => false} empty={null}>
         {({ services, employees }) => {
           const steps = [
             {
               done: services.length > 0,
-              text: "Add the services you offer, each with how long it takes.",
+              title: "Add your services",
+              detail: "What a customer books, and how long it takes.",
               href: `/dashboard/${businessId}/services`,
               cta: "Add a service",
             },
             {
               done: employees.length > 0,
-              text: "Add the people who perform them.",
+              title: "Add the people who perform them",
+              detail: "Availability is worked out per person.",
               href: `/dashboard/${businessId}/employees`,
               cta: "Add an employee",
             },
             {
               done: employees.some((e) => e.serviceIds.length > 0),
-              text: "Say who performs what, and when each person works.",
+              title: "Say who performs what, and when they work",
+              detail: "Someone with no services or no hours is never offered.",
               href: `/dashboard/${businessId}/employees`,
               cta: "Set services and hours",
             },
@@ -67,47 +83,84 @@ export default function BusinessOverviewPage({
 
           if (!next) {
             return (
-              <div className="flex flex-col gap-3">
-                <p className="text-slate-700">
-                  {services.length} service{services.length === 1 ? "" : "s"} and{" "}
-                  {employees.length} employee{employees.length === 1 ? "" : "s"} configured.
+              <div className="flex flex-col gap-5">
+                {/* Said in words as well as counted in tiles: a number beside a label tells a
+                    reader how many, and a sentence tells them what it means. */}
+                <p className="text-sm text-ink-muted">
+                  Ready to take bookings — {services.length} service
+                  {services.length === 1 ? "" : "s"} and {employees.length}{" "}
+                  {employees.length === 1 ? "person" : "people"} set up.
                 </p>
-                <Link
-                  className="w-fit rounded-md bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700"
-                  href={`/dashboard/${businessId}/availability`}
-                >
-                  Check availability
-                </Link>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <Stat label="Services" value={services.length} />
+                  <Stat label="People" value={employees.length} />
+                  <Card className="flex flex-col justify-between gap-3">
+                    <p className="text-sm text-ink-muted">Nothing left to configure.</p>
+                    <Link
+                      href={`/dashboard/${businessId}/calendar`}
+                      className="text-sm font-medium text-brand-700 hover:text-brand-800"
+                    >
+                      Check the calendar →
+                    </Link>
+                  </Card>
+                </div>
               </div>
             );
           }
 
           return (
-            <div className="flex flex-col gap-4">
-              <p className="text-slate-700">
+            <Card className="flex flex-col gap-5">
+              <p className="text-sm text-ink-muted">
                 Bookly can only offer a time once it knows what you sell, who performs it and when
                 they work. Three steps.
               </p>
-              <ol className="flex flex-col gap-2">
+              <ol className="flex flex-col gap-4">
                 {steps.map((step) => (
-                  <li key={step.text} className="flex items-start gap-2 text-slate-700">
-                    <span aria-hidden="true">{step.done ? "✓" : "○"}</span>
-                    <span className={step.done ? "text-slate-500 line-through" : ""}>
-                      {step.text}
+                  <li key={step.title} className="flex gap-3">
+                    <span
+                      aria-hidden="true"
+                      className={[
+                        "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold",
+                        step.done
+                          ? "bg-brand-600 text-white"
+                          : "border border-border-strong text-ink-faint",
+                      ].join(" ")}
+                    >
+                      {step.done ? "✓" : ""}
                     </span>
+                    <div className="min-w-0">
+                      <p
+                        className={
+                          step.done ? "text-sm text-ink-subtle line-through" : "text-sm font-medium text-ink"
+                        }
+                      >
+                        {step.title}
+                        <span className="sr-only">{step.done ? " — done" : " — still to do"}</span>
+                      </p>
+                      <p className="mt-0.5 text-sm text-ink-subtle">{step.detail}</p>
+                    </div>
                   </li>
                 ))}
               </ol>
               <Link
-                className="w-fit rounded-md bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700"
                 href={next.href}
+                className="bg-brand-gradient inline-flex h-11 w-fit items-center justify-center rounded-md px-5 text-sm font-medium text-white shadow-card transition-[box-shadow,filter] duration-150 hover:shadow-card-hover hover:brightness-105"
               >
                 {next.cta}
               </Link>
-            </div>
+            </Card>
           );
         }}
       </AsyncSection>
-    </section>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <Card>
+      <p className="text-xs font-medium uppercase tracking-wide text-ink-subtle">{label}</p>
+      <p className="mt-1 text-3xl font-semibold tabular-nums text-ink">{value}</p>
+    </Card>
   );
 }

@@ -1,126 +1,108 @@
 "use client";
 
-import { zodResolver } from "@/lib/zod-resolver";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useState } from "react";
-import { useForm } from "react-hook-form";
-import { z } from "zod";
-import { Field, buttonClass, inputClass } from "@/components/Field";
+import { AsyncSection } from "@/components/AsyncSection";
+import { Field } from "@/components/Field";
 import { FormError } from "@/components/FormError";
+import { Button } from "@/components/ui/Button";
+import { Card } from "@/components/ui/Card";
+import { Input } from "@/components/ui/Input";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { ApiError, api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 
-const schema = z.object({
-  name: z.string().min(1, "Give the business a name.").max(120),
-  timezone: z.string().min(1, "Choose a time zone."),
-});
-
-/**
- * Four states, all distinguishable: loading, error, empty, content. The empty state is the one an
- * agent skips, and it is the state every new account starts in.
- */
 export default function DashboardPage() {
   const { tokens } = useAuth();
-  const accessToken = tokens?.accessToken ?? "";
+  const token = tokens?.accessToken ?? "";
   const queryClient = useQueryClient();
   const [failure, setFailure] = useState<string | null>(null);
+  const [name, setName] = useState("");
+  const [timezone, setTimezone] = useState(
+    () => Intl.DateTimeFormat().resolvedOptions().timeZone,
+  );
 
   const businesses = useQuery({
     queryKey: ["businesses"],
-    queryFn: () => api.listBusinesses(accessToken),
-    enabled: Boolean(accessToken),
+    queryFn: () => api.listBusinesses(token),
+    enabled: Boolean(token),
   });
 
-  const {
-    register,
-    handleSubmit,
-    reset,
-    formState: { errors },
-  } = useForm<z.infer<typeof schema>>({
-    resolver: zodResolver(schema),
-    defaultValues: {
-      // A sensible default the owner can change, rather than an empty field that
-      // invites a wrong answer nobody notices until a slot is offered at 3am.
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    },
-  });
-
-  const createBusiness = useMutation({
-    mutationFn: (values: z.infer<typeof schema>) => api.createBusiness(accessToken, values),
+  const create = useMutation({
+    mutationFn: () => api.createBusiness(token, { name: name.trim(), timezone }),
     onSuccess: () => {
       setFailure(null);
-      reset();
+      setName("");
       void queryClient.invalidateQueries({ queryKey: ["businesses"] });
     },
     onError: (error) =>
-      setFailure(
-        error instanceof ApiError
-          ? error.body.message
-          : "Could not reach the server. Try again.",
-      ),
+      setFailure(error instanceof ApiError ? error.body.message : "Could not reach the server."),
   });
 
   return (
     <div className="flex flex-col gap-8">
-      <section>
-        <h1 className="text-2xl font-semibold">Your businesses</h1>
+      <PageHeader
+        title="Your businesses"
+        description="Each business has its own services, people, hours and public booking page."
+      />
 
-        {businesses.isPending ? (
-          <p className="mt-4 text-slate-600">Loading your businesses…</p>
-        ) : businesses.isError ? (
-          <div className="mt-4">
-            <FormError message="Could not load your businesses." />
-            <button
-              className="mt-2 text-sm underline"
-              type="button"
-              onClick={() => businesses.refetch()}
-            >
-              Try again
-            </button>
-          </div>
-        ) : businesses.data.length === 0 ? (
-          <p className="mt-4 rounded-md border border-dashed border-slate-300 p-6 text-slate-600">
-            You have no businesses yet. Create one below and you will get a public booking
-            link customers can use.
-          </p>
-        ) : (
-          <ul className="mt-4 divide-y divide-slate-200 rounded-md border border-slate-200 bg-white">
-            {businesses.data.map((business) => (
-              <li key={business.id} className="px-4 py-3">
-                <Link className="font-medium underline" href={`/dashboard/${business.id}`}>
-                  {business.name}
+      <AsyncSection
+        query={businesses}
+        label="your businesses"
+        isEmpty={(data) => data.length === 0}
+        empty={
+          <>
+            No businesses yet. Create one below and you will get a public booking link customers can
+            use straight away.
+          </>
+        }
+      >
+        {(data) => (
+          <ul className="grid gap-3 sm:grid-cols-2">
+            {data.map((business) => (
+              <li key={business.id}>
+                <Link
+                  href={`/dashboard/${business.id}`}
+                  className="group block rounded-lg border border-border bg-surface p-5 shadow-card transition-shadow duration-150 hover:shadow-card-hover"
+                >
+                  <p className="font-medium text-ink group-hover:text-brand-700">{business.name}</p>
+                  <p className="mt-1 truncate text-sm text-ink-subtle">
+                    /book/{business.slug} · {business.timezone}
+                  </p>
                 </Link>
-                <p className="text-sm text-slate-600">
-                  /book/{business.slug} · {business.timezone}
-                </p>
               </li>
             ))}
           </ul>
         )}
-      </section>
+      </AsyncSection>
 
-      <section>
-        <h2 className="text-lg font-semibold">Add a business</h2>
+      <Card>
+        <h2 className="text-lg font-semibold text-ink">Add a business</h2>
         <form
-          className="mt-4 flex flex-col gap-4"
-          onSubmit={handleSubmit((values) => createBusiness.mutate(values))}
+          className="mt-4 flex flex-col gap-4 sm:max-w-md"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (name.trim()) {
+              create.mutate();
+            }
+          }}
         >
           <FormError message={failure} />
-
-          <Field label="Business name" error={errors.name?.message}>
-            <input className={inputClass} {...register("name")} />
+          <Field label="Business name">
+            <Input value={name} onChange={(event) => setName(event.target.value)} required />
           </Field>
-
-          <Field label="Time zone" error={errors.timezone?.message}>
-            <input className={inputClass} {...register("timezone")} />
+          <Field
+            label="Time zone"
+            hint="Every time your customers see is shown on this clock."
+          >
+            <Input value={timezone} onChange={(event) => setTimezone(event.target.value)} required />
           </Field>
-
-          <button className={buttonClass} type="submit" disabled={createBusiness.isPending}>
-            {createBusiness.isPending ? "Creating…" : "Create business"}
-          </button>
+          <Button type="submit" loading={create.isPending} disabled={!name.trim()}>
+            Create business
+          </Button>
         </form>
-      </section>
+      </Card>
     </div>
   );
 }
