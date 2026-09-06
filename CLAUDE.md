@@ -120,11 +120,29 @@ cache is empty.
 
 ## Frontend
 
+**Design standard: [`.claude/skills/frontend-design/SKILL.md`](.claude/skills/frontend-design/SKILL.md).**
+Read it before designing, implementing, reviewing or improving any UI. It governs the palette,
+typography, spacing, components, states and accessibility, and it sets the bar: *would this look
+credible if Bookly launched tomorrow as a real product?* The rules below are the engineering half
+and do not override it.
+
+Two things the standard says that are easy to lose and expensive to retrofit: **check the existing
+component before making a new one** — improve the shared one rather than growing a fourth variant —
+and **a page composes small components** rather than holding hundreds of lines of JSX.
+
 - Server state through TanStack Query; forms through React Hook Form with Zod schemas. No manual
   `useEffect` fetching.
 - Types for API payloads are generated from the OpenAPI document, not hand-copied.
 - Every screen that loads data renders four distinguishable states: loading, empty, error, and
-  content. A failure looks like a failure — never a blank list and never a default value.
+  content. A failure looks like a failure — never a blank list and never a default value. The
+  design standard sharpens this: loading means a skeleton rather than the word "Loading", and an
+  empty state says what is missing, why it matters, and what to do next.
+- **The browser suite is the safety net for redesign work, and it is also a constraint.** It
+  selects by role, label, and a small number of `data-testid` hooks — `slots`, `appointment-list`,
+  `calendar-week`, `empty-week`, `confirmed-when`. Restyling freely is fine; renaming those hooks
+  or changing an accessible name silently breaks the only automated proof that the booking flow
+  works. Change them deliberately and update the tests in the same commit, never one without the
+  other.
 - No secret, key or privileged decision in browser code. The browser is untrusted.
 
 ## Git
