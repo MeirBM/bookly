@@ -104,6 +104,15 @@ management:
     health:
       probes:
         enabled: true
+      group:
+        # Readiness means "can serve requests correctly", which requires the database and does
+        # not require Redis: the rate limiter fails open by design, so a Redis outage degrades a
+        # control rather than breaking correctness. Aggregate /actuator/health still reports DOWN
+        # when Redis is unreachable, which is what a human should see - but a platform health
+        # check pointed at it would restart a container that is serving perfectly well, and
+        # restart loops hide the actual problem.
+        readiness:
+          include: readinessState, db
 
 springdoc:
   api-docs:
