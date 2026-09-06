@@ -4,6 +4,7 @@ import com.bookly.common.error.ApiException;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -70,13 +71,30 @@ public class AppointmentWriter {
             return appointments.saveAndFlush(appointment);
         } catch (DataIntegrityViolationException ex) {
             if (mentions(ex, OVERLAP_CONSTRAINT)) {
-                log.info("Booking lost the race for employee {} at {}",
-                        appointment.getEmployeeId(), appointment.getStartsAt());
-                throw ApiException.conflict("SLOT_TAKEN",
-                        "Someone just took that time. Please choose another.");
+                throw taken(appointment);
             }
             throw ex;
+        } catch (CannotAcquireLockException ex) {
+            // A deadlock on this insert means what an exclusion violation means: the row was
+            // contended. Two simultaneous inserts for the same employee and instant routinely
+            // deadlock on the constraint's gist index, and PostgreSQL kills one of them - which
+            // arrives as CannotAcquireLockException, not DataIntegrityViolationException, so it
+            // escaped the catch above and reached the caller as a 500.
+            //
+            // The guarantee was never in doubt: exactly one appointment existed every time. What
+            // failed was the contract on top of it - nineteen people told the server had broken
+            // when the truth was that someone got there first. Mapping it to the same 409 is
+            // reliable in a way more retries would not be: retries lower the frequency, they do
+            // not close it.
+            throw taken(appointment);
         }
+    }
+
+    private ApiException taken(Appointment appointment) {
+        log.info("Booking lost the race for employee {} at {}",
+                appointment.getEmployeeId(), appointment.getStartsAt());
+        return ApiException.conflict("SLOT_TAKEN",
+                "Someone just took that time. Please choose another.");
     }
 
     private static boolean mentions(Throwable error, String needle) {

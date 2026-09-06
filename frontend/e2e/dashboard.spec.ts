@@ -7,6 +7,7 @@ import {
   publicAvailability,
   seedBookable,
   signIn as signInAsBookingOwner,
+  upcoming,
 } from "./support/fixtures";
 
 /**
@@ -428,7 +429,7 @@ test.describe("dashboard screens", () => {
     const bookable = await seed(request, owner, { withService: true, withEmployee: true, withHours: true });
     const noHours = await seed(request, owner, { withService: true, withEmployee: true });
     const url = (id: string) => `/dashboard/${id}/availability`;
-    const date = "2026-09-09";
+    const date = upcoming("THURSDAY");
     await signIn(page, owner);
 
     await assertLoadingStateIsShown(page, url(bookable.businessId));
@@ -509,7 +510,7 @@ test.describe("dashboard screens", () => {
     await signIn(page, owner);
 
     // What the engine actually answers for the date the screen will be asked about.
-    const date = "2026-09-09";
+    const date = upcoming("THURSDAY");
     const api = await request.get(
       `${API}/api/businesses/${bookable.businessId}/availability` +
         `?serviceId=${bookable.serviceId}&date=${date}`,
@@ -577,7 +578,7 @@ test.describe("dashboard screens", () => {
   test("theOwnerSeesAndCancelsABooking", async ({ page, request }) => {
     const owner = await newBookingOwner(request);
     const seeded = await seedBookable(request, owner, { durationMinutes: 30 });
-    const date = "2026-10-15";
+    const date = upcoming("THURSDAY");
 
     // A visitor books on the public page — the same route a browser would have used.
     const availability = await publicAvailability(request, seeded.slug, seeded.serviceId, date);
@@ -595,8 +596,8 @@ test.describe("dashboard screens", () => {
     await signInAsBookingOwner(page, owner);
     await page.goto(`/dashboard/${seeded.businessId}/appointments`);
     const dateInputs = page.locator("input[type=date]");
-    await dateInputs.nth(0).fill("2026-10-01");
-    await dateInputs.nth(1).fill("2026-10-31");
+    await dateInputs.nth(0).fill(date);
+    await dateInputs.nth(1).fill(date);
     await expect(page.getByText(/priya visitor/i), "the owner sees who booked")
       .toBeVisible({ timeout: SETTLE });
 
@@ -615,7 +616,7 @@ test.describe("dashboard screens", () => {
     await expect
       .poll(
         async () => {
-          const list = await ownersAppointments(request, owner, seeded.businessId, "2026-10-01", "2026-10-31");
+          const list = await ownersAppointments(request, owner, seeded.businessId, date, date);
           return list[0]?.status;
         },
         {
@@ -653,7 +654,7 @@ test.describe("dashboard screens", () => {
         { weekday: "THURSDAY", start: "09:00:00", end: "17:00:00" },
       ],
     });
-    const wednesday = "2026-10-21";
+    const wednesday = upcoming("WEDNESDAY");
 
     // The first slot of a 00:00-01:00 window is midnight itself. Taken from the engine rather than
     // computed here, so the zone offset on the day is the tzdb's answer and not mine.

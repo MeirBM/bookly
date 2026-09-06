@@ -50,7 +50,7 @@ class AppointmentConstraintIT extends ApiIntegrationTest {
     void databaseRefusesAnOverlapWithoutApplicationCode() {
         Bookable bookable = newBookableBusiness("constraint", 60);
         String customerId = insertCustomer(bookable.businessId(), "direct-" + java.util.UUID.randomUUID() + "@x.test");
-        Instant ten = Instant.parse("2026-10-14T10:00:00Z");
+        Instant ten = BOOKING_DATE.atTime(10, 0).toInstant(java.time.ZoneOffset.UTC);
 
         insertAppointment(bookable, customerId, ten, ten.plusSeconds(3600), "PENDING");
 
@@ -89,7 +89,7 @@ class AppointmentConstraintIT extends ApiIntegrationTest {
     void backToBackAppointmentsArePermitted() {
         Bookable bookable = newBookableBusiness("backtoback", 60);
         String customerId = insertCustomer(bookable.businessId(), "b2b-" + java.util.UUID.randomUUID() + "@x.test");
-        Instant ten = Instant.parse("2026-10-14T10:00:00Z");
+        Instant ten = BOOKING_DATE.atTime(10, 0).toInstant(java.time.ZoneOffset.UTC);
 
         insertAppointment(bookable, customerId, ten, ten.plusSeconds(3600), "PENDING");
 

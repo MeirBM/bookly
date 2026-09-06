@@ -235,8 +235,22 @@ public abstract class ApiIntegrationTest extends AbstractIntegrationTest {
             int durationMinutes,
             String timezone) {}
 
-    /** A date far enough ahead that nothing in the suite has to think about "now". */
-    protected static final LocalDate BOOKING_DATE = LocalDate.of(2026, 10, 14);
+    /**
+     * The day the booking suites work on: the first Wednesday at least three weeks from now.
+     *
+     * <p>Relative to now, not a fixed calendar date. A fixed one was a time bomb: criterion 3.28
+     * refuses a start in the past with 400, so the morning after that date passed, every booking
+     * test in the project would have failed — and failed looking like a booking defect rather than
+     * a stale fixture, which is the most expensive kind of red build to read.
+     *
+     * <p>Three weeks ahead keeps it comfortably inside the booking horizon, including the narrowed
+     * horizon {@code BookingIT} sets for itself. The weekday is pinned deliberately rather than
+     * left to whatever "now plus 21 days" lands on, so a fixture that seeds hours for one named
+     * weekday still lines up with it.
+     */
+    protected static final LocalDate BOOKING_DATE = LocalDate.now(java.time.ZoneOffset.UTC)
+            .plusDays(21)
+            .with(java.time.temporal.TemporalAdjusters.nextOrSame(DayOfWeek.WEDNESDAY));
 
     /**
      * Business, service, employee, the link between them, and hours on every weekday — so a test

@@ -8,6 +8,7 @@ import {
   publicAvailability,
   seedBookable,
   seedUnbookable,
+  upcoming,
   type Seeded,
 } from "./support/fixtures";
 
@@ -24,7 +25,10 @@ import {
  */
 
 /** A Thursday, comfortably ahead of "now" and inside the booking horizon (3.28). */
-const DATE = "2026-10-15";
+const DATE = upcoming("THURSDAY");
+
+/** A Monday: the 3.20 fixture rosters Thursdays only, so this is a day with genuinely nothing on. */
+const DAY_NOBODY_WORKS = upcoming("MONDAY");
 
 const NOT_FOUND_TEXT = /nothing to book|no business taking bookings/i;
 // Deliberately not just /booked/: the confirmation says "You are booked", so a matcher containing
@@ -254,7 +258,7 @@ test.describe("public booking page", () => {
     const contentText = await bodyText(page);
 
     // --- empty: a real question with an empty answer.
-    await whileSlotsReload(page, () => page.locator("input[type=date]").fill("2026-10-19")); // Monday
+    await whileSlotsReload(page, () => page.locator("input[type=date]").fill(DAY_NOBODY_WORKS));
     const emptyText = await bodyText(page);
     expect(
       emptyText,

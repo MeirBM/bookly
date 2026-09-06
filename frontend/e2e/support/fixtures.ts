@@ -39,6 +39,34 @@ export const EVERY_WEEKDAY: WorkingWindow[] = [
   "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY",
 ].map((weekday) => ({ weekday, start: "09:00:00", end: "17:00:00" }));
 
+const WEEKDAY_NAMES = [
+  "SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY",
+] as const;
+
+export type Weekday = (typeof WEEKDAY_NAMES)[number];
+
+/**
+ * The next given weekday at least `minDaysAhead` days from today, as `YYYY-MM-DD`.
+ *
+ * <p>Relative to now, because a fixed date is a time bomb: criterion 3.28 refuses a start in the
+ * past with 400, so the morning after a hard-coded date passed, every booking test would fail while
+ * looking like a booking defect. Three weeks ahead keeps it inside the booking horizon, and the
+ * weekday is named rather than inferred so it lines up with the working hours a fixture seeds.
+ *
+ * <p>Computed in UTC: the date the API and the page take is a business-local calendar date with no
+ * zone of its own, so what matters is only that it names the intended weekday.
+ */
+export function upcoming(weekday: Weekday, minDaysAhead = 21): string {
+  const target = WEEKDAY_NAMES.indexOf(weekday);
+  const date = new Date();
+  date.setUTCHours(0, 0, 0, 0);
+  date.setUTCDate(date.getUTCDate() + minDaysAhead);
+  while (date.getUTCDay() !== target) {
+    date.setUTCDate(date.getUTCDate() + 1);
+  }
+  return date.toISOString().slice(0, 10);
+}
+
 function stamp(): string {
   return `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
 }

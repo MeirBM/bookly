@@ -35,13 +35,13 @@ bytes were searched case-insensitively for full names, surnames alone, emails, e
 phone digits, every customer id, every appointment id, the business UUID, the owner's user id,
 working-hours ids, and a blocked time's private reason text. Nothing leaked.
 
-### Interface (3.18–3.22) — four met, one failing
+### Interface (3.18–3.22) — all met
 
 | # | Criterion | Test | Result |
 |---|---|---|---|
 | 3.18 | A visitor books from start to finish | `booking.spec.ts.aVisitorCanBookFromStartToFinish` | pass |
 | 3.19 | A slot taken mid-booking is reported, not swallowed | `booking.spec.ts.aSlotTakenWhileBookingIsReportedNotSwallowed` | pass |
-| 3.20 | Four distinguishable states | `booking.spec.ts` | **failing — see §1a** |
+| 3.20 | Four distinguishable states | `booking.spec.ts` | pass |
 | 3.21 | The owner sees and cancels a booking | `dashboard.spec.ts.theOwnerSeesAndCancelsABooking` | pass |
 | 3.22 | The calendar places appointments in the business's zone | `dashboard.spec.ts.theCalendarPlacesAppointmentsCorrectly` | pass |
 
@@ -61,27 +61,48 @@ absent from the viewer's. A calendar bucketing by the viewer's clock fails both.
 
 The runbook is written ([`docs/deploy.md`](../deploy.md)) and nothing is deployed. See §1a.
 
-### Controls the security review added (3.27–3.32) — **five unevidenced, one not decidable**
+### Controls the security review added (3.27–3.32) — five met, one not decidable
 
-**An earlier version of this audit listed these as met and named tests for them. Those tests do not
+**An earlier version of this audit listed these as met and named tests for them. Those tests did not
 exist.** The criteria were added to the specification after the security review and no verification
-was ever commissioned for them; the backend suite is at exactly the count it reached before they
-were written. The claim was mine, it was not checked, and it is the precise failure this document is
-supposed to prevent — an audit that asserts rather than evidences is worse than no audit, because it
-is believed.
+was ever commissioned; the backend suite sat at exactly the count it had reached before they were
+written. The claim was mine and it was not checked — the precise failure this document exists to
+prevent, since an audit that asserts rather than evidences is worse than none, being believed. The
+suites were then written and **three of the six criteria failed on real defects**, which is the
+sharpest possible answer to whether the claim was safe.
 
 | # | Criterion | Named decider | Status |
 |---|---|---|---|
-| 3.27 | An anonymous booking cannot rewrite an existing customer's details | `PublicBookingIT.anonymousBookingCannotRewriteAnExistingCustomer` | **does not exist** |
-| 3.28 | A past or beyond-horizon start is refused | `BookingIT.refusesAPastStart`, `.refusesBeyondTheHorizon` | **do not exist** |
-| 3.29 | Only bookable people are named | `PublicBookingIT.publicSurfaceNamesOnlyBookablePeople`, `.aBusinessWithNobodyAbleToServeIsNotDiscoverable` | **do not exist** |
-| 3.30 | The limiter keys on the client address behind a proxy | none — not decidable by this suite | reasoned only |
-| 3.31 | The two conflict codes reveal no occupancy | `PublicBookingIT.theTwoConflictCodesRevealNoOccupancy` | **does not exist** |
-| 3.32 | Two visitors sharing an email both succeed | `AppointmentConcurrencyIT.twoBookingsSharingAnEmailBothSucceed` | **does not exist** |
+| # | Test | First result |
+|---|---|---|
+| 3.27 | `PublicBookingIT.anonymousBookingCannotRewriteAnExistingCustomer` | passed |
+| 3.28 | `BookingIT.refusesAPastStart`, `.refusesBeyondTheHorizon` | passed |
+| 3.29 | `PublicBookingIT.publicSurfaceNamesOnlyBookablePeople` | **failed** — the roster named someone who performs the service but has no working hours, so every date they offer comes back empty |
+| 3.29 | `.aBusinessWithNobodyAbleToServeIsNotDiscoverable` | passed |
+| 3.30 | none — not decidable by this suite | unevidenced |
+| 3.31 | `PublicBookingIT.theTwoConflictCodesRevealNoOccupancy` | **failed** — see below |
+| 3.32 | `AppointmentConcurrencyIT.twoBookingsSharingAnEmailBothSucceed` | **failed** — still 500, by a new mechanism |
 
-The code changes behind all six are in `de661d6` and were verified by hand at the time, but 3.27 and
-3.31 are security findings and *"I checked it once"* is not what this pack accepts from anyone else.
-**The independent test writer found this, by looking for the deciders the specification named.**
+**3.31 was the serious one, and my earlier fix had only narrowed it.** Requiring that the employee
+perform the service closed the probe through a service they do not; for one they do, the codes still
+flipped on occupancy at hours the surface never offers — `03:00` busy answered `SLOT_TAKEN`, `05:00`
+free answered `SLOT_NOT_AVAILABLE`, and neither hour is ever offered publicly. An anonymous caller
+could walk instants and read an employee's private diary hour by hour, days off included.
+
+The mistake was the question. *Is anyone busy then* leaks a diary; *would this time have been offered
+at all* cannot. Availability is now recomputed ignoring bookings. The re-attacked test probes five
+instants the surface never offers — including one inside a blocked period where the employee is
+genuinely busy, and one inside working hours on a day they do not work — and all five answer
+identically whether busy or free.
+
+**3.32's 500 returned by a different mechanism than the one that caused it.** The duplicate email
+*was* caught and the read retried, inside a transaction PostgreSQL had already aborted, so the retry
+failed with *"current transaction is aborted"* and escaped. Recovery inside a poisoned transaction is
+not recovery. That is turn-3 pitfall 4 in its third distinct form.
+
+**3.30 remains unevidenced and is recorded as such.** Every request in the suite originates from one
+address, so keyed-per-address and keyed-globally are indistinguishable to it. The test writer was
+asked not to fake it and did not.
 
 **3.30 is honestly weaker than the others and says so in the spec.** Every request in the suite
 originates from 127.0.0.1, so "keyed per address" and "keyed globally" are indistinguishable to it.
@@ -92,19 +113,13 @@ Settling it requires the deployed instance, and §6 records the check to run the
 
 ### 1a. What is not met, stated plainly
 
-- **3.20 fails on a real defect.** With the public API failing, `/book/{slug}` shows the *not-found*
-  state — "There is no business taking bookings at this address" — for a transient server fault. A
-  visitor told that during an outage does not come back; the business loses a customer it would have
-  had and the owner never learns. It also collapses two of the four states the criterion asks a
-  reader to tell apart. Criterion 3.17 requires *unknown* and *unbookable* to be indistinguishable;
-  it says nothing about a 500, and conflating a server fault with non-existence is not required by
-  it.
 - **3.23–3.26 (four criteria) are not done.** Nothing is deployed: no URL, no boot log showing
-  Flyway migrating from empty, no end-to-end pass against a public host.
-- **3.27–3.32 (six criteria) are unevidenced**, as set out above.
+  Flyway migrating from empty, no end-to-end pass against a public host. The runbook is written and
+  the deployment needs an account this project does not have.
+- **3.30 is unevidenced** — reasoned, not tested, for the reason given above.
 
-Eleven of thirty-two criteria are therefore unmet, failing, or unevidenced. That is recorded here
-rather than reinterpreted, and it is why the verdict below is not a pass.
+Five of thirty-two criteria are therefore unmet or unevidenced. Everything else is demonstrated by a
+named test or a linked CI run.
 
 ---
 
@@ -138,8 +153,24 @@ four ambiguities, all of which were defects in the specification rather than in 
 **Run result:**
 
 ```
-./mvnw -B clean verify     39 unit, 108 integration     BUILD SUCCESS
+./mvnw -B clean verify     39 unit, 115 integration     BUILD SUCCESS
+npm run test:e2e           18 browser                   18 passed
 ```
+
+**One further defect, found after the suites were complete, in the contract rather than the
+guarantee.** Concurrent identical inserts routinely deadlock on the exclusion constraint's gist
+index; PostgreSQL kills one, and that arrives as `CannotAcquireLockException` — not a
+`DataIntegrityViolationException`, so it escaped the catch and reached the caller as a **500**. One
+full-suite run in four. Exactly one appointment existed every time, including the failing runs: the
+guarantee never wavered. What failed was telling nineteen people the server had broken when the
+truth was that someone got there first. A deadlock on that insert means what the exclusion violation
+means — the row was contended — so both now answer 409 `SLOT_TAKEN`.
+
+Verified by repetition rather than by one green run: six consecutive runs of the concurrency suite
+all passed, and **the fourth logged 38 deadlocks and took 42 seconds instead of 5** — the failing
+path was exercised and the contract held. Neither browser test could have found this: the taken-slot
+test stages a *sequential* race and receives a clean 409, and a test asserting only the row count
+would have called the failing run a success.
 
 CI green on all four jobs at `de661d6`:
 https://github.com/MeirBM/bookly/actions/runs/34043024711
@@ -236,13 +267,19 @@ curl -fsS https://<backend>/v3/api-docs      # must be 403
 
 ## Verdict
 
-**Not ready to merge.** Twenty-one of thirty-two criteria are demonstrated by a named test or a
-linked CI run. One (3.20) fails on a real defect. Four (3.23–3.26) are not done. Six (3.27–3.32) are
-unevidenced, five of them because tests this document once claimed existed do not.
+**Not ready to merge — for one reason, and it is not a defect.** Twenty-seven of thirty-two criteria
+are demonstrated by a named test or a linked CI run. Four (3.23–3.26) require a deployment this
+project has no account for. One (3.30) is reasoned rather than tested, because no suite whose
+requests share an address can decide it.
 
-By this pack's own rule that is not a pass, and softening it would defeat the purpose of having the
-rule. What would make it one, in order: fix the 3.20 error state, commission the six missing suites,
-deploy per `docs/deploy.md`, and run the checks in §6 against it.
+By this pack's rule that is not a pass, and softening it would defeat the purpose of the rule. What
+would make it one: the deployment in `docs/deploy.md`, and the checks in §6 run against it.
+
+**The most useful thing in this audit is the paragraph admitting it was wrong.** It asserted six
+criteria it had not checked; three of those six then failed on real defects, one of them a diary
+readable by any stranger. It was caught by the one reader positioned to catch it — the agent that
+goes looking for the deciders the specification names, because it cannot see the code and has
+nothing else to work from.
 
 **The most useful thing in this audit is the paragraph admitting it was wrong.** An audit is only
 worth what its weakest claim is worth, and this one asserted six criteria it had not checked. It was

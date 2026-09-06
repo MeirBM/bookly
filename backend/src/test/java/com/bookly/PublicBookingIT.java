@@ -8,6 +8,7 @@ import com.bookly.support.Routes;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.time.DayOfWeek;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -246,7 +247,9 @@ class PublicBookingIT extends ApiIntegrationTest {
         forbidden.put(bookable.businessId(), "the business's internal id — the public handle is the slug");
         forbidden.put(bookable.owner().userId(), "the owner's user id");
         String blockedTimeId = newBlockedTime(bookable.owner(), bookable.businessId(), null,
-                        Instant.parse("2026-10-20T07:00:00Z"), Instant.parse("2026-10-20T08:00:00Z"), "Private reason")
+                        BOOKING_DATE.plusDays(6).atTime(7, 0).toInstant(java.time.ZoneOffset.UTC),
+                        BOOKING_DATE.plusDays(6).atTime(8, 0).toInstant(java.time.ZoneOffset.UTC),
+                        "Private reason")
                 .path("id")
                 .asText();
         forbidden.put(blockedTimeId, "a blocked time's id");
@@ -371,7 +374,8 @@ class PublicBookingIT extends ApiIntegrationTest {
         responses.put("POST public booking, a time already taken", publicBook(bookable.slug(), body(
                 "serviceId", bookable.serviceId(),
                 "employeeId", bookable.employeeId(),
-                "startsAt", free.isEmpty() ? Instant.parse("2026-10-14T07:00:00Z").toString()
+                "startsAt", free.isEmpty()
+                        ? BOOKING_DATE.atTime(7, 0).toInstant(java.time.ZoneOffset.UTC).toString()
                         : free.get(0).toString(),
                 "customerName", "Sweep Loser",
                 "customerEmail", "sweep-loser-" + UUID.randomUUID() + "@example.test",
@@ -643,10 +647,17 @@ class PublicBookingIT extends ApiIntegrationTest {
      *
      * <p>Otherwise the booking endpoint is an oracle for a person's diary: an attacker who cannot
      * see any availability at all can still ask "is this employee busy at 03:00 on Sunday?" and
-     * read the answer off the error code. The three probes below are all instants the public
-     * surface never offers — a service the employee does not perform, an hour outside their
-     * working window, and a day they do not work — and in each case the busy instant and the free
-     * instant must be answered identically.
+     * read the answer off the error code.
+     *
+     * <p>Every probe below is an instant the public surface does not offer, and each is withheld
+     * for a <em>different</em> reason — a service the employee does not perform, an hour outside
+     * the working window, a weekday they do not work, and an hour inside a blocked period. The
+     * reason matters: the safe question is "would this time have been offered at all", and the
+     * leaking question is "is anybody busy then". A fix that asks the safe question closes all
+     * four at once; one that special-cases the reason it happened to be shown closes one.
+     *
+     * <p>In each case the busy instant and the free instant must be answered identically — same
+     * status, same code, same body.
      */
     @Test
     @DisplayName("3.31 the two conflict codes reveal no occupancy")
@@ -665,17 +676,9 @@ class PublicBookingIT extends ApiIntegrationTest {
                 .orElseThrow(() -> new AssertionError("no free slot left to compare against"));
 
         // Busy and free outside the working window, where nothing is ever offered.
-        String customerId = jdbc().queryForObject(
-                "insert into customers (business_id, full_name, email) values (?::uuid, ?, ?) returning id::text",
-                String.class, bookable.businessId(), "Night Owl", "night-" + UUID.randomUUID() + "@x.test");
+        String customerId = insertCustomerDirectly(bookable.businessId());
         Instant busyAtNight = LocalTime.of(3, 0).atDate(BOOKING_DATE).atZone(zone).toInstant();
-        jdbc().update(
-                "insert into appointments "
-                        + "(business_id, employee_id, service_id, customer_id, starts_at, ends_at, status) "
-                        + "values (?::uuid, ?::uuid, ?::uuid, ?::uuid, ?, ?, 'CONFIRMED')",
-                bookable.businessId(), bookable.employeeId(), bookable.serviceId(), customerId,
-                java.sql.Timestamp.from(busyAtNight),
-                java.sql.Timestamp.from(busyAtNight.plusSeconds(3600)));
+        insertAppointmentDirectly(bookable, customerId, busyAtNight, busyAtNight.plusSeconds(3600));
         Instant freeAtNight = LocalTime.of(5, 0).atDate(BOOKING_DATE).atZone(zone).toInstant();
 
         // A service this employee does not perform: nothing is offered for it at any hour.
@@ -690,19 +693,46 @@ class PublicBookingIT extends ApiIntegrationTest {
                 .as("the probe service is answerable")
                 .isEqualTo(200);
 
-        record Probe(String what, String serviceId, Instant busy, Instant free) {}
+        // Inside working hours, inside a blocked period: withheld, but not because of a booking.
+        Instant blockFrom = LocalTime.of(14, 0).atDate(BOOKING_DATE).atZone(zone).toInstant();
+        Instant blockTo = LocalTime.of(16, 0).atDate(BOOKING_DATE).atZone(zone).toInstant();
+        newBlockedTime(bookable.owner(), bookable.businessId(), bookable.employeeId(),
+                blockFrom, blockTo, "Dentist");
+        insertAppointmentDirectly(bookable, customerId, blockFrom, blockFrom.plusSeconds(3600));
+        Instant freeInsideBlock = blockFrom.plusSeconds(3600);
+
+        // Inside working hours, on a weekday the employee does not work at all.
+        Bookable oneDayOnly = businessWorkingOnlyOn("oracle-dayoff", BOOKING_DATE.getDayOfWeek(), 60);
+        LocalDate dayOff = BOOKING_DATE.plusDays(1);
+        assertThat(availableStarts(oneDayOnly.owner(), oneDayOnly.businessId(), oneDayOnly.serviceId(),
+                        oneDayOnly.employeeId(), dayOff))
+                .as("the fixture is only a day off if nothing is offered on it")
+                .isEmpty();
+        String dayOffCustomer = insertCustomerDirectly(oneDayOnly.businessId());
+        Instant busyOnDayOff = LocalTime.of(10, 0).atDate(dayOff)
+                .atZone(ZoneId.of(oneDayOnly.timezone())).toInstant();
+        insertAppointmentDirectly(oneDayOnly, dayOffCustomer, busyOnDayOff, busyOnDayOff.plusSeconds(3600));
+        Instant freeOnDayOff = busyOnDayOff.plusSeconds(2 * 3600);
+
+        record Probe(String what, Bookable at, String serviceId, Instant busy, Instant free) {}
         List<Probe> probes = List.of(
                 new Probe("a service the employee does not perform",
-                        unperformedService, busyOffered, freeOffered),
+                        bookable, unperformedService, busyOffered, freeOffered),
                 new Probe("an hour outside the working window",
-                        bookable.serviceId(), busyAtNight, freeAtNight),
+                        bookable, bookable.serviceId(), busyAtNight, freeAtNight),
                 new Probe("a service the employee does not perform, probed outside hours",
-                        unperformedService, busyAtNight, freeAtNight));
+                        bookable, unperformedService, busyAtNight, freeAtNight),
+                new Probe("an hour inside a blocked period, which availability withholds for a "
+                        + "reason that has nothing to do with a booking",
+                        bookable, bookable.serviceId(), blockFrom, freeInsideBlock),
+                new Probe("an hour inside the working window but on a weekday the employee does "
+                        + "not work",
+                        oneDayOnly, oneDayOnly.serviceId(), busyOnDayOff, freeOnDayOff));
 
         SoftAssertions soft = new SoftAssertions();
         for (Probe probe : probes) {
-            ResponseEntity<String> whenBusy = probeBooking(bookable, probe.serviceId(), probe.busy());
-            ResponseEntity<String> whenFree = probeBooking(bookable, probe.serviceId(), probe.free());
+            ResponseEntity<String> whenBusy = probeBooking(probe.at(), probe.serviceId(), probe.busy());
+            ResponseEntity<String> whenFree = probeBooking(probe.at(), probe.serviceId(), probe.free());
 
             soft.assertThat(whenBusy.getStatusCode())
                     .as("%s: the status must not depend on whether the employee happens to be "
@@ -721,6 +751,39 @@ class PublicBookingIT extends ApiIntegrationTest {
                     .isFalse();
         }
         soft.assertAll();
+    }
+
+    /** A business whose only employee works one weekday, so every other day is a day off. */
+    private Bookable businessWorkingOnlyOn(String label, DayOfWeek weekday, int durationMinutes) {
+        Account owner = newAccount(label);
+        JsonNode business = newBusiness(owner, "One Day Only " + UUID.randomUUID(), "Asia/Jerusalem");
+        String businessId = business.path("id").asText();
+        String serviceId = newService(owner, businessId, "Service " + UUID.randomUUID(), durationMinutes)
+                .path("id")
+                .asText();
+        String employeeId = newEmployee(owner, businessId, "Part Timer " + UUID.randomUUID())
+                .path("id")
+                .asText();
+        linkServices(owner, businessId, employeeId, serviceId);
+        newWorkingHours(owner, businessId, employeeId, weekday, "09:00:00", "17:00:00");
+        return new Bookable(owner, businessId, business.path("slug").asText(), serviceId, employeeId,
+                durationMinutes, business.path("timezone").asText());
+    }
+
+    private String insertCustomerDirectly(String businessId) {
+        return jdbc().queryForObject(
+                "insert into customers (business_id, full_name, email) values (?::uuid, ?, ?) returning id::text",
+                String.class, businessId, "Directly Inserted", "direct-" + UUID.randomUUID() + "@x.test");
+    }
+
+    /** Occupies time without going through booking, so the probe's target is busy for real. */
+    private void insertAppointmentDirectly(Bookable bookable, String customerId, Instant start, Instant end) {
+        jdbc().update(
+                "insert into appointments "
+                        + "(business_id, employee_id, service_id, customer_id, starts_at, ends_at, status) "
+                        + "values (?::uuid, ?::uuid, ?::uuid, ?::uuid, ?, ?, 'CONFIRMED')",
+                bookable.businessId(), bookable.employeeId(), bookable.serviceId(), customerId,
+                java.sql.Timestamp.from(start), java.sql.Timestamp.from(end));
     }
 
     private ResponseEntity<String> probeBooking(Bookable bookable, String serviceId, Instant startsAt) {
