@@ -119,6 +119,10 @@ drifts.
 |---|---|---|
 | 1 | Foundation, authentication, tenant isolation | complete — [audit](docs/audit/turn-1.md) |
 | 2 | Services, employees, working hours, availability engine | complete — [audit](docs/audit/turn-2.md) |
-| 3 | Booking, concurrency, public booking page | complete — [audit](docs/audit/turn-3.md) · deployment outstanding, accepted as an override |
+| 3 | Booking, concurrency, public booking page, deployment | complete — [audit](docs/audit/turn-3.md) · 32/32 criteria |
 
-Deployed URL: _pending — see [`docs/deploy.md`](docs/deploy.md) for the runbook._
+Deployed URL: **https://bookly-production-a85b.up.railway.app**
+
+Public booking page for a business is at `/book/{slug}`; the API is the same host.
+The deployment runbook, including three failures worth reading before repeating them,
+is [`docs/deploy.md`](docs/deploy.md).

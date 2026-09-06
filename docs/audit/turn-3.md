@@ -57,9 +57,29 @@ Auckland — the previous afternoon for the viewer. The test asserts the two zon
 day *before* asserting anything else, then requires the appointment under the business's heading and
 absent from the viewer's. A calendar bucketing by the viewer's clock fails both.
 
-### Deployment (3.23–3.26) — **not done**
+### Deployment (3.23–3.26) — met, verified against the live instance
 
-The runbook is written ([`docs/deploy.md`](../deploy.md)) and nothing is deployed. See §1a.
+**https://bookly-production-a85b.up.railway.app** — backend, PostgreSQL and Redis on Railway.
+
+| # | Criterion | Evidence |
+|---|---|---|
+| 3.23 | A public HTTPS URL, named in `README.md` | `/actuator/health` → `200 {"status":"UP"}` |
+| 3.24 | Flyway migrates from empty on boot, no manual step | the exclusion constraint is enforced in production (below), which only exists if V5 applied to a database V1 had created |
+| 3.25 | No secret in deployment configuration | `/v3/api-docs` → `401`, not published; every value is a Railway `${{...}}` reference or a key generated outside the repository; the hook and the full-history scan pass |
+| 3.26 | A booking on the deployed URL is visible in the deployed dashboard | the full loop below |
+
+**The loop, run against the live URL:** register → login → business → service → employee →
+working hours → the public page read anonymously → 10 slots for a 45-minute service on a
+three-hour Monday window → **anonymous booking accepted** → **the same slot refused with 409
+`SLOT_TAKEN`** → availability drops 10 → 7 → the owner's dashboard shows the customer's name and
+email, which the visitor's own responses never carried.
+
+**That refusal is the whole project, and it is the strongest single piece of evidence here.**
+`SLOT_TAKEN` in production means the exclusion constraint exists there; the constraint cannot be
+created without `btree_gist`; the extension is created by V5; and V5 cannot apply to a database V1
+never built. One 409 therefore demonstrates criteria 3.1, 3.2's guarantee and 3.24 at once — and it
+is behaviour rather than inference, which is what turn-3 pitfall 1 warned to check before the
+deadline rather than on it.
 
 ### Controls the security review added (3.27–3.32) — five met, one not decidable
 
@@ -111,15 +131,31 @@ What the fix rests on is `server.forward-headers-strategy`, set to `framework` i
 without a trusted proxy in front lets a caller spoof `X-Forwarded-For` into an unlimited allowance.
 Settling it requires the deployed instance, and §6 records the check to run there.
 
-### 1a. What is not met, stated plainly
+### 1a. 3.30, decided at last — and the deployment defect it exposed
 
-- **3.23–3.26 (four criteria) are not done.** Nothing is deployed: no URL, no boot log showing
-  Flyway migrating from empty, no end-to-end pass against a public host. The runbook is written and
-  the deployment needs an account this project does not have.
-- **3.30 is unevidenced** — reasoned, not tested, for the reason given above.
+**3.30 was the one criterion no suite could decide.** Every request in a test suite originates from
+one address, so *keyed per address* and *keyed globally* are indistinguishable to it. A real
+deployment behind a real proxy is the first place the question can be answered, and the answer is
+recorded here rather than reasoned:
 
-Five of thirty-two criteria are therefore unmet or unevidenced. Everything else is demonstrated by a
-named test or a linked CI run.
+- 70 requests at the public surface against a 60/minute limit returned **exactly 60 × `200` then
+  10 × `429`** — the configured limit, to the request.
+- The refusals logged `Rate limit exceeded for /api/public/businesses/… **from 85.65.208.21**`,
+  which is the caller's real public address, not Railway's proxy. So `FORWARD_HEADERS_STRATEGY`
+  is in effect and the limiter keys per caller.
+- Two requests sent with a forged `X-Forwarded-For` were **still logged as the real address**.
+  Railway's edge overwrites the header rather than appending to it, so the spoofing risk that
+  justified defaulting forwarded headers to `none` does not materialise on this platform. That is a
+  property of the deployment, not of the application, and would need rechecking on another host.
+
+**Finding, fixed during verification.** The first deployment served every request correctly while
+Redis was unreachable: `/actuator/health` reported `DOWN`, and 70 requests against a 60/minute limit
+returned 70 × `200`. The rate limiter fails open by design — refusing every login while a cache is
+down turns a cache outage into a total outage — so **the control bounding the project's only
+unauthenticated write had silently stopped applying, and nothing in the API's behaviour said so.**
+The cause was that Railway's Redis requires credentials which `REDIS_HOST` and `REDIS_PORT` do not
+carry; `SPRING_DATA_REDIS_URL` carries all four. Recorded because "the deployment is up" and "the
+deployment is correct" were two different things here, and only a burst test told them apart.
 
 ---
 
@@ -252,26 +288,34 @@ automated cover and this is what stands in its place:
 - The owner's list shows the customer's name and email; the visitor's own responses carry neither.
 - Cancelling returns availability to ten.
 
-**Still to run on the deployed instance** (criteria 3.23–3.26, and settling 3.30):
+**Run against the deployed instance**, https://bookly-production-a85b.up.railway.app:
 
-```sql
-CREATE EXTENSION IF NOT EXISTS btree_gist;   -- must succeed, or 3.1 is not honoured in production
 ```
-```bash
-curl -fsS https://<backend>/actuator/health
-curl -fsS https://<backend>/v3/api-docs      # must be 403
-# then: 61 rapid public requests from one host must NOT return 429 to a second host
+/actuator/health                     200  {"status":"UP","groups":["liveness","readiness"]}
+/v3/api-docs                         401  (not published, EXPOSE_API_DOCS=false)
+/api/public/businesses/<unknown>     404  (identical to an unbookable business — 3.17)
+70 requests vs a 60/min limit        60 × 200, then 10 × 429
+rate-limit refusals logged           "from 85.65.208.21" — the caller, not the proxy
+forged X-Forwarded-For               still logged as the real address
+full booking loop                    accepted, then 409 SLOT_TAKEN, availability 10 → 7
 ```
+
+Three deployment attempts failed before this one, each for a different reason, and all three are
+written up in `docs/deploy.md` with their exact error text: a builder that could not choose between
+two applications in one repository; a signing key below the length the application refuses to start
+without; and a platform variable reference with a typo that resolved to **empty rather than
+missing**, which defeats a default in a way a missing value would not.
 
 ---
 
-## Override — accepted by the project owner, 2026-09-06
+## Override — accepted at merge, and since discharged
 
-The verdict below stands as written: by this pack's rule, five unmet criteria are not a pass. The
-owner reviewed exactly what was outstanding and **explicitly accepted it**, and the merge proceeds on
-that decision rather than on a reinterpretation of the rule.
+Turn 3 merged with five criteria outstanding, accepted explicitly by the owner rather than by a
+softened verdict. **All five have since been met**, against the live deployment, and the evidence is
+recorded above. The override is left here rather than deleted: what was accepted, and on what
+understanding, is part of the trail.
 
-**What was accepted:**
+**What was accepted at the time:**
 
 | # | Criterion | Why it is outstanding |
 |---|---|---|
@@ -286,23 +330,22 @@ failed. Four require a deployment; the fifth requires two hosts. Every criterion
 decided by a test was decided by one, and three of those failed on real defects when the tests were
 finally written — the section above says so.
 
-**The condition attached.** Deployment happens from `main` after this merge, and §6 lists the checks
-to run against it — beginning with `CREATE EXTENSION btree_gist`, because criterion 3.1 is not
-honoured in production without it. **If that privilege is withheld, the deployment must be reported
-as unable to honour the guarantee rather than quietly shipped**; the runbook says the same. This
-audit is to be updated on `main` with the outcome either way.
+**The condition attached, and its outcome.** The override required that `CREATE EXTENSION
+btree_gist` be confirmed on the deployed database, because criterion 3.1 is not honoured in
+production without it, and that a failure be reported rather than quietly shipped. **It succeeded**
+— demonstrated by the deployed instance refusing a duplicate booking with 409 `SLOT_TAKEN`, which
+the constraint alone can produce.
 
 ---
 
 ## Verdict
 
-**Not ready to merge — for one reason, and it is not a defect.** Twenty-seven of thirty-two criteria
-are demonstrated by a named test or a linked CI run. Four (3.23–3.26) require a deployment this
-project has no account for. One (3.30) is reasoned rather than tested, because no suite whose
-requests share an address can decide it.
+**All thirty-two criteria met.** Twenty-seven by a named test or a linked CI run; five against the
+live deployment, recorded above with what was actually observed rather than what was expected.
 
-By this pack's rule that is not a pass, and softening it would defeat the purpose of the rule. What
-would make it one: the deployment in `docs/deploy.md`, and the checks in §6 run against it.
+Turn 3 merged before those five were met, under an override the owner accepted explicitly. The
+override has since been discharged, including its condition — `btree_gist` exists in production, and
+the deployed instance refuses a duplicate booking.
 
 **The most useful thing in this audit is the paragraph admitting it was wrong.** It asserted six
 criteria it had not checked; three of those six then failed on real defects, one of them a diary
