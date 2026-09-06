@@ -1,5 +1,7 @@
 package com.bookly.availability;
 
+import com.bookly.appointment.Appointment;
+import com.bookly.appointment.AppointmentRepository;
 import com.bookly.availability.dto.AvailabilityDtos.AvailabilityResponse;
 import com.bookly.availability.dto.AvailabilityDtos.AvailableSlot;
 import com.bookly.business.Business;
@@ -36,6 +38,7 @@ public class AvailabilityService {
     private final ServiceCatalog serviceCatalog;
     private final WorkingHoursRepository workingHours;
     private final BlockedTimeRepository blockedTimes;
+    private final AppointmentRepository appointments;
     private final Duration step;
 
     private static final int MIN_YEAR = 1970;
@@ -46,12 +49,14 @@ public class AvailabilityService {
                                ServiceCatalog serviceCatalog,
                                WorkingHoursRepository workingHours,
                                BlockedTimeRepository blockedTimes,
+                               AppointmentRepository appointments,
                                @Value("${bookly.availability.step:PT15M}") Duration step) {
         this.businesses = businesses;
         this.employees = employees;
         this.serviceCatalog = serviceCatalog;
         this.workingHours = workingHours;
         this.blockedTimes = blockedTimes;
+        this.appointments = appointments;
         this.step = step;
     }
 
@@ -106,10 +111,15 @@ public class AvailabilityService {
             if (windows.isEmpty()) {
                 continue;
             }
-            List<BusyInterval> busy = blockedTimes
-                    .findOverlapping(businessId, employee.getId(), dayStart, dayEnd).stream()
-                    .map(BlockedTime::toBusyInterval)
-                    .toList();
+            // Blocked time and booked time, in one list. The calculator was built in turn 2 not
+            // to know what makes an interval busy, and this is where that is collected on: an
+            // appointment becomes unavailability without the engine changing a line.
+            List<BusyInterval> busy = new ArrayList<>();
+            blockedTimes.findOverlapping(businessId, employee.getId(), dayStart, dayEnd)
+                    .forEach(blocked -> busy.add(blocked.toBusyInterval()));
+            appointments.findOccupying(businessId, employee.getId(), dayStart, dayEnd)
+                    .forEach(appointment -> busy.add(
+                            new BusyInterval(appointment.getStartsAt(), appointment.getEndsAt())));
 
             for (Instant start : AvailabilityCalculator.startTimes(
                     date, zone, windows, busy, offering.getDuration(), step)) {

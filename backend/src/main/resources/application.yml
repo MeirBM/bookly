@@ -70,6 +70,9 @@ bookly:
       # Looser and principal-keyed: the rest of the API is authenticated, and the risk there
       # is an account creating unbounded rows or driving an expensive read in a loop.
       api-max-requests: 300
+      # The public booking surface: unauthenticated, and the only place an anonymous caller can
+      # write. Metered by address, more tightly than the authenticated API.
+      public-max-requests: 60
       window: PT1M
     # The document is a complete map of the API surface. Criterion 1.16 requires it to exist and
     # be complete; it does not require it to be public. On for local development, off by default
