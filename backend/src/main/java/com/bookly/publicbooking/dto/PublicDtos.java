@@ -24,8 +24,14 @@ public final class PublicDtos {
     public record PublicService(UUID id, String name, int durationMinutes, Long priceMinor) {
     }
 
-    /** Name and id only. A visitor needs to choose a person, not to learn about them. */
-    public record PublicEmployee(UUID id, String name) {
+    /**
+     * Name, id, and what this person performs.
+     *
+     * <p>No more than that: a visitor needs to choose a person, not to learn about them. The
+     * service ids are already derivable by asking for availability service by service, so listing
+     * them discloses nothing new and saves the page a call per service.
+     */
+    public record PublicEmployee(UUID id, String name, List<UUID> serviceIds) {
     }
 
     public record PublicBusiness(String slug, String name, String timezone,

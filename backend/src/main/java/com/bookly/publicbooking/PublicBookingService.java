@@ -19,6 +19,7 @@ import com.bookly.publicbooking.dto.PublicDtos.PublicService;
 import com.bookly.publicbooking.dto.PublicDtos.PublicSlot;
 import com.bookly.service.ServiceOffering;
 import com.bookly.service.ServiceOfferingRepository;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
@@ -63,7 +64,9 @@ public class PublicBookingService {
 
         List<PublicEmployee> people = employees
                 .findByBusinessIdOrderByFullName(business.getId()).stream()
-                .map(employee -> new PublicEmployee(employee.getId(), employee.getFullName()))
+                .map(employee -> new PublicEmployee(employee.getId(), employee.getFullName(),
+                        employee.getServices().stream().map(ServiceOffering::getId).sorted()
+                                .toList()))
                 .toList();
 
         return new PublicBusiness(business.getSlug(), business.getName(), business.getTimezone(),
@@ -104,10 +107,31 @@ public class PublicBookingService {
                 appointment.getEndsAt(), business.getTimezone(), appointment.getStatus().name());
     }
 
-    /** One answer for an unknown slug and an unbookable business, so neither can be probed. */
+    /**
+     * One answer for an unknown slug and a business that cannot be booked, so neither can be probed.
+     *
+     * <p>The first version checked only that the slug existed, which made this an enumeration
+     * oracle: a stranger guessing slugs learned which were real and read each one's name and time
+     * zone — including businesses that had never opened for booking. Existing is not the same as
+     * being open, and only the second is public.
+     *
+     * <p>"Bookable" is at least one service and at least one person to perform it. A business
+     * missing either cannot produce a single slot, so there is nothing to show and no reason to
+     * confirm it exists.
+     */
     private Business requireBookable(String slug) {
-        return businesses.findBySlug(slug)
-                .orElseThrow(() -> ApiException.notFoundInBusiness("BUSINESS_NOT_BOOKABLE",
-                        "No bookable business at that address."));
+        Business business = businesses.findBySlug(slug)
+                .orElseThrow(PublicBookingService::notBookable);
+        boolean hasSomethingToBook = services.countByBusinessId(business.getId()) > 0
+                && employees.countByBusinessId(business.getId()) > 0;
+        if (!hasSomethingToBook) {
+            throw notBookable();
+        }
+        return business;
+    }
+
+    private static ApiException notBookable() {
+        return ApiException.notFoundInBusiness("BUSINESS_NOT_BOOKABLE",
+                "No bookable business at that address.");
     }
 }

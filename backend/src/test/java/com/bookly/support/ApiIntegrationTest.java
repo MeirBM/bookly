@@ -1,11 +1,12 @@
 package com.bookly.support;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import javax.sql.DataSource;
@@ -220,5 +221,133 @@ public abstract class ApiIntegrationTest extends AbstractIntegrationTest {
             path.append("&employeeId=").append(employeeId);
         }
         return get(path.toString(), caller.accessToken());
+    }
+
+    // ------------------------------------------------------ turn-3 booking fixtures
+
+    /** A business configured far enough that something can actually be booked in it. */
+    public record Bookable(
+            Account owner,
+            String businessId,
+            String slug,
+            String serviceId,
+            String employeeId,
+            int durationMinutes,
+            String timezone) {}
+
+    /** A date far enough ahead that nothing in the suite has to think about "now". */
+    protected static final LocalDate BOOKING_DATE = LocalDate.of(2026, 10, 14);
+
+    /**
+     * Business, service, employee, the link between them, and hours on every weekday — so a test
+     * never has to reason about which day {@link #BOOKING_DATE} lands on.
+     */
+    protected Bookable newBookableBusiness(String label, int durationMinutes) {
+        Account owner = newAccount(label);
+        JsonNode business = newBusiness(owner, "Bookable " + label + " " + UUID.randomUUID(), "Asia/Jerusalem");
+        String businessId = business.path("id").asText();
+        String serviceId = newService(owner, businessId, "Service " + UUID.randomUUID(), durationMinutes)
+                .path("id")
+                .asText();
+        String employeeId = newEmployee(owner, businessId, "Employee " + UUID.randomUUID()).path("id").asText();
+        linkServices(owner, businessId, employeeId, serviceId);
+        for (DayOfWeek weekday : DayOfWeek.values()) {
+            newWorkingHours(owner, businessId, employeeId, weekday, "09:00:00", "17:00:00");
+        }
+        return new Bookable(
+                owner,
+                businessId,
+                business.path("slug").asText(),
+                serviceId,
+                employeeId,
+                durationMinutes,
+                business.path("timezone").asText());
+    }
+
+    /** Adds a second employee who also performs the service. */
+    protected String addLinkedEmployee(Bookable bookable, String name) {
+        String employeeId = newEmployee(bookable.owner(), bookable.businessId(), name).path("id").asText();
+        linkServices(bookable.owner(), bookable.businessId(), employeeId, bookable.serviceId());
+        for (DayOfWeek weekday : DayOfWeek.values()) {
+            newWorkingHours(bookable.owner(), bookable.businessId(), employeeId, weekday, "09:00:00", "17:00:00");
+        }
+        return employeeId;
+    }
+
+    protected List<Instant> availableStarts(
+            Account caller, String businessId, String serviceId, String employeeId, LocalDate date) {
+        ResponseEntity<String> response = availability(caller, businessId, serviceId, employeeId, date);
+        if (response.getStatusCode().value() != 200) {
+            throw new AssertionError("fixture setup: availability expected 200 but got "
+                    + response.getStatusCode() + " body=" + response.getBody());
+        }
+        List<Instant> starts = new java.util.ArrayList<>();
+        json(response).path("slots").forEach(slot -> starts.add(Instant.parse(slot.path("start").asText())));
+        return starts;
+    }
+
+    /** The first time the engine is currently willing to offer for this service and employee. */
+    protected Instant firstAvailableStart(Bookable bookable) {
+        List<Instant> starts = availableStarts(
+                bookable.owner(), bookable.businessId(), bookable.serviceId(), bookable.employeeId(), BOOKING_DATE);
+        if (starts.isEmpty()) {
+            throw new AssertionError("fixture setup: no slot on " + BOOKING_DATE + " for " + bookable);
+        }
+        return starts.get(0);
+    }
+
+    protected Map<String, Object> bookingBody(
+            String serviceId, String employeeId, Instant startsAt, String customerEmail) {
+        return body(
+                "serviceId", serviceId,
+                "employeeId", employeeId,
+                "startsAt", startsAt.toString(),
+                "customerName", "Customer " + customerEmail,
+                "customerEmail", customerEmail,
+                "customerPhone", "+972500000000");
+    }
+
+    /** Books through the owner's route. */
+    protected ResponseEntity<String> book(
+            Bookable bookable, String employeeId, Instant startsAt, String customerEmail) {
+        return post(
+                businessPath(bookable.businessId(), "/appointments"),
+                bookingBody(bookable.serviceId(), employeeId, startsAt, customerEmail),
+                bookable.owner().accessToken());
+    }
+
+    protected JsonNode bookOrFail(Bookable bookable, Instant startsAt, String customerEmail) {
+        ResponseEntity<String> response = book(bookable, bookable.employeeId(), startsAt, customerEmail);
+        if (response.getStatusCode().value() != 201) {
+            throw new AssertionError("fixture setup: booking expected 201 but got "
+                    + response.getStatusCode() + " body=" + response.getBody());
+        }
+        return json(response);
+    }
+
+    // ------------------------------------------------------------- public surface
+
+    protected String publicPath(String slug, String suffix) {
+        return "/api/public/businesses/" + slug + suffix;
+    }
+
+    /** Anonymous: no token, deliberately. */
+    protected ResponseEntity<String> publicBusiness(String slug) {
+        return get(publicPath(slug, ""), null);
+    }
+
+    protected ResponseEntity<String> publicAvailability(
+            String slug, String serviceId, String employeeId, LocalDate date) {
+        StringBuilder path = new StringBuilder(publicPath(slug, "/availability"))
+                .append("?serviceId=").append(serviceId)
+                .append("&date=").append(date);
+        if (employeeId != null) {
+            path.append("&employeeId=").append(employeeId);
+        }
+        return get(path.toString(), null);
+    }
+
+    protected ResponseEntity<String> publicBook(String slug, Object requestBody) {
+        return post(publicPath(slug, "/appointments"), requestBody, null);
     }
 }

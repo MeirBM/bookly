@@ -32,10 +32,10 @@ cannot be honoured costs a person standing in a shop that has no room for them.
 | # | Criterion | Decided by |
 |---|---|---|
 | 3.1 | The database refuses two overlapping appointments for one employee, independently of application code — a direct `INSERT` of an overlapping row fails | `AppointmentConstraintIT.databaseRefusesAnOverlapWithoutApplicationCode` |
-| 3.2 | Twenty concurrent identical booking requests produce **exactly one** appointment; the other nineteen receive 409 and the response names a stable code | `AppointmentConcurrencyIT.exactlyOneOfManySimultaneousBookingsSucceeds` |
+| 3.2 | Twenty concurrent identical booking requests produce **exactly one** appointment; every loser receives 409 with the code `SLOT_TAKEN` — one code, because a page that recognises only one of two will mishandle the other and show the silent failure 3.19 forbids | `AppointmentConcurrencyIT.exactlyOneOfManySimultaneousBookingsSucceeds` |
 | 3.3 | A cancelled appointment does not block its former time: the slot reappears in availability and can be rebooked | `AppointmentLifecycleIT.cancellingFreesTheSlot` |
 | 3.4 | Two appointments may touch — one ending exactly when the next begins is permitted | `AppointmentConstraintIT.backToBackAppointmentsArePermitted` |
-| 3.5 | An appointment is refused unless its start is a slot the availability engine actually offers | `BookingIT.refusesATimeThatWasNeverOffered` |
+| 3.5 | An appointment is refused with **409 `SLOT_NOT_AVAILABLE`** unless its start is a slot the availability engine actually offers. Distinct from `SLOT_TAKEN`: this time was never on offer, rather than offered and since taken | `BookingIT.refusesATimeThatWasNeverOffered` |
 | 3.6 | An appointment is refused for an employee who does not perform the service | `BookingIT.refusesAnEmployeeWhoDoesNotPerformTheService` |
 | 3.7 | Rescheduling into an occupied time leaves the original appointment exactly as it was | `AppointmentLifecycleIT.aFailedRescheduleChangesNothing` |
 | 3.8 | Every status change writes one row to `appointment_status_history`, including creation | `AppointmentLifecycleIT.everyStatusChangeIsRecorded` |
@@ -52,7 +52,7 @@ cannot be honoured costs a person standing in a shop that has no room for them.
 | 3.14 | The public surface exposes no employee for a service they do not perform, and no internal id beyond what booking requires | `PublicBookingIT.publicSurfaceDisclosesNothingInternal` |
 | 3.15 | Every public route is rate limited by address, more strictly than the authenticated API | `PublicRateLimitIT` |
 | 3.16 | A public booking creates a customer for that business, or reuses the existing one with the same email, and never reaches a customer of another business | `PublicBookingIT.customerIsPerBusiness` |
-| 3.17 | An unknown slug is refused identically to a slug that exists but is not bookable | `PublicBookingIT.unknownAndUnbookableSlugsAreIndistinguishable` |
+| 3.17 | An unknown slug is refused identically to a slug that exists but is **not bookable** — defined as having no services, or nobody to perform them. Existing is not the same as being open, and only the second is public: otherwise the slug space is an enumeration oracle that reveals a business's name and time zone to anyone who guesses | `PublicBookingIT.unknownAndUnbookableSlugsAreIndistinguishable` |
 
 ### Interface
 
@@ -60,7 +60,7 @@ cannot be honoured costs a person standing in a shop that has no room for them.
 |---|---|---|
 | 3.18 | A visitor can complete service → employee → date → slot → details → confirmation in the browser | `booking.spec.ts.aVisitorCanBookFromStartToFinish` |
 | 3.19 | A slot taken between page load and submit shows a clear message and refreshed slots — never a silent failure, and never a confirmation | `booking.spec.ts.aSlotTakenWhileBookingIsReportedNotSwallowed` |
-| 3.20 | The public page renders four distinguishable states, including a business with nothing bookable | `booking.spec.ts` |
+| 3.20 | The public page renders four distinguishable states. A business with nothing bookable is **not** one of them: 3.17 makes it indistinguishable from an address that does not exist, so the page shows the same not-found state for both | `booking.spec.ts` |
 | 3.21 | The owner sees the appointment in the dashboard list, and can cancel it there | `dashboard.spec.ts.theOwnerSeesAndCancelsABooking` |
 | 3.22 | The dashboard calendar shows a week, places each appointment in the right day and time in the **business's** zone, and shows an empty week as empty rather than blank | `dashboard.spec.ts.theCalendarPlacesAppointmentsCorrectly` |
 
@@ -165,3 +165,4 @@ reader can open.
 | Date | Change |
 |---|---|
 | 2026-09-05 | First version, written before any implementation commit. |
+| 2026-09-06 | Revised after the verification suite found one defect and five ambiguities. 3.17 now defines "not bookable", because the implementation checked only that the slug existed and so answered 200 with a name and time zone for a business that had never opened — the same enumeration-oracle class as 1.5 and 1.12, and the natural thing to write. 3.20 follows from it: a business with nothing bookable is not a state the page can show, because it must not be distinguishable from an address that does not exist. 3.2 and 3.5 now name their codes: the losers of a race were split across `SLOT_TAKEN` and `SLOT_NOT_AVAILABLE` depending on whether the constraint or the re-derivation caught it, and a page recognising only one would have shown a silent failure — the booking service now distinguishes *never offered* from *offered and taken* rather than reporting whichever check fired first. **All four were defects in this document, not in the tests.** |

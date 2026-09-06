@@ -152,10 +152,13 @@ class OpenApiIT extends ApiIntegrationTest {
                 }
             }
 
-            boolean isAuthEndpoint = route.pattern().startsWith("/api/auth/");
-            if (isAuthEndpoint) {
+            // Which routes must demand a token follows the route's audience, not its path prefix:
+            // the public booking surface is anonymous by design and must not be documented as
+            // needing one, exactly as the entry points must not.
+            if (Routes.isAnonymous(route)) {
                 if (!required.isEmpty()) {
-                    authRoutesDemandingAToken.add(route + " requires " + required);
+                    authRoutesDemandingAToken.add(
+                            route + " (" + Routes.categoryOf(route) + ") requires " + required);
                 }
                 continue;
             }
@@ -177,7 +180,8 @@ class OpenApiIT extends ApiIntegrationTest {
                 .as("routes under /api/businesses documented as needing no authentication")
                 .isEmpty();
         assertThat(authRoutesDemandingAToken)
-                .as("auth routes documented as needing a token, which no caller can have yet")
+                .as("routes documented as needing a token that are reachable without one: an entry "
+                        + "point has no caller yet, and the public surface has no account at all")
                 .isEmpty();
         assertThat(referencingAnUndeclaredScheme)
                 .as("routes referencing a security scheme the document never declares")
@@ -283,9 +287,26 @@ class OpenApiIT extends ApiIntegrationTest {
      */
     private final class Fixtures {
 
-        private final Account owner = newAccount("openapi-real");
-        private final String businessId =
-                newBusiness(owner, "Status Code Salon", "Asia/Jerusalem").path("id").asText();
+        // A business configured far enough that a booking route can actually be exercised.
+        private final Bookable bookable = newBookableBusiness("openapi-real", 60);
+        private final Account owner = bookable.owner();
+        private final String businessId = bookable.businessId();
+
+        /** A start the engine is currently offering; each call returns one not yet taken. */
+        private Instant freeStart() {
+            java.util.List<Instant> starts = availableStarts(
+                    owner, businessId, bookable.serviceId(), bookable.employeeId(), BOOKING_DATE);
+            if (starts.isEmpty()) {
+                throw new IllegalStateException("no slot left to exercise a booking route with");
+            }
+            return starts.get(0);
+        }
+
+        private String freshAppointmentId() {
+            return bookOrFail(bookable, freeStart(), UUID.randomUUID() + "@example.test")
+                    .path("id")
+                    .asText();
+        }
 
         private String freshServiceId() {
             return newService(owner, businessId, "Service " + UUID.randomUUID(), 30).path("id").asText();
@@ -304,6 +325,8 @@ class OpenApiIT extends ApiIntegrationTest {
                                 owner, businessId, freshEmployeeId(), DayOfWeek.MONDAY, "09:00:00", "17:00:00")
                         .path("id")
                         .asText();
+                case "slug" -> bookable.slug();
+                case "appointmentId" -> freshAppointmentId();
                 case "blockedTimeId" -> {
                     Instant start = Instant.parse("2026-06-10T07:00:00Z");
                     yield newBlockedTime(owner, businessId, null, start, start.plusSeconds(3600), "Blocked")
@@ -318,7 +341,9 @@ class OpenApiIT extends ApiIntegrationTest {
             return switch (name) {
                 case "serviceId" -> freshServiceId();
                 case "employeeId" -> freshEmployeeId();
-                case "date" -> "2026-06-10";
+                case "date" -> BOOKING_DATE.toString();
+                case "from" -> BOOKING_DATE.atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toString();
+                case "to" -> BOOKING_DATE.plusDays(1).atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toString();
                 default -> throw new CannotExercise("no value known for query parameter " + name);
             };
         }
@@ -338,6 +363,10 @@ class OpenApiIT extends ApiIntegrationTest {
                 case "CreateBlockedTime" -> body("startsAt", "2026-06-11T07:00:00Z",
                         "endsAt", "2026-06-11T08:00:00Z", "reason", "Documented");
                 case "SetServices" -> body("serviceIds", List.of(freshServiceId()));
+                case "CreateBooking", "PublicBookingRequest" -> bookingBody(
+                        bookable.serviceId(), bookable.employeeId(), freeStart(),
+                        UUID.randomUUID() + "@example.test");
+                case "Reschedule" -> body("startsAt", freeStart().toString());
                 default -> throw new CannotExercise("no sample body known for schema " + schema);
             };
         }
@@ -377,7 +406,9 @@ class OpenApiIT extends ApiIntegrationTest {
                 }
             }
 
-            return new Request(path + query, requestBody, owner.accessToken());
+            // The public surface is exercised as a stranger, because that is who calls it.
+            String token = template.startsWith(Routes.PUBLIC_PREFIX) ? null : owner.accessToken();
+            return new Request(path + query, requestBody, token);
         }
     }
 }

@@ -159,8 +159,19 @@ public class BookingService {
                 .anyMatch(startsAt::equals);
 
         if (!matches) {
+            // Two different situations reach here and a client must be able to tell them apart:
+            // a time that was never on offer (outside working hours, an employee who does not
+            // perform this service) and one that was on offer and has since been taken. Losing a
+            // race is the second, and it is the case the booking page has to recover from.
+            Instant endsAt = startsAt.plus(service.getDuration());
+            boolean taken = !appointments
+                    .findOccupying(businessId, employeeId, startsAt, endsAt).isEmpty();
+            if (taken) {
+                throw ApiException.conflict("SLOT_TAKEN",
+                        "Someone just took that time. Please choose another.");
+            }
             throw ApiException.conflict("SLOT_NOT_AVAILABLE",
-                    "That time is no longer available. Please choose another.");
+                    "That time is not available. Please choose another.");
         }
     }
 

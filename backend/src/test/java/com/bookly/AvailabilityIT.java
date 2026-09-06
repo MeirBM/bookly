@@ -243,4 +243,58 @@ class AvailabilityIT extends ApiIntegrationTest {
                     .isEqualTo(serviceDuration);
         }
     }
+
+    /**
+     * 3.10 — a booked time is busy, and it becomes busy through the same input blocked times use.
+     *
+     * <p>Turn 2 built the engine not to know what makes an interval unavailable, and this is the
+     * turn that collects on it. The strongest way to state that is not "the slot disappeared" but
+     * "an appointment and a blocked time of the same span remove exactly the same slots" — if
+     * appointments arrived by a second path, the two answers would differ somewhere.
+     */
+    @Test
+    @DisplayName("3.10 a booked slot is no longer offered, exactly as a blocked time would be")
+    void aBookedSlotIsNoLongerOffered() {
+        Bookable booked = newBookableBusiness("busy-booked", 60);
+        List<Instant> before = availableStarts(booked.owner(), booked.businessId(), booked.serviceId(),
+                booked.employeeId(), BOOKING_DATE);
+        assertThat(before).as("a nine-to-five day offers slots before anything is booked").isNotEmpty();
+
+        Instant taken = before.get(0);
+        Instant endOfAppointment = taken.plus(Duration.ofMinutes(booked.durationMinutes()));
+        bookOrFail(booked, taken, "busy-" + java.util.UUID.randomUUID() + "@example.test");
+
+        List<Instant> after = availableStarts(booked.owner(), booked.businessId(), booked.serviceId(),
+                booked.employeeId(), BOOKING_DATE);
+
+        assertThat(after).as("the booked time itself is gone").doesNotContain(taken);
+        for (Instant start : after) {
+            Instant end = start.plus(Duration.ofMinutes(booked.durationMinutes()));
+            boolean overlaps = start.isBefore(endOfAppointment) && taken.isBefore(end);
+            assertThat(overlaps)
+                    .as("%s would run into the appointment at %s; offering it promises a time the "
+                            + "business cannot honour", start, taken)
+                    .isFalse();
+        }
+        assertThat(after)
+                .as("times that do not touch the appointment are still on offer")
+                .contains(endOfAppointment);
+
+        // The same span, blocked instead of booked, in an identically configured business.
+        Bookable blocked = newBookableBusiness("busy-blocked", 60);
+        List<Instant> blockedBefore = availableStarts(blocked.owner(), blocked.businessId(), blocked.serviceId(),
+                blocked.employeeId(), BOOKING_DATE);
+        assertThat(blockedBefore)
+                .as("the two businesses are configured alike, so they start alike")
+                .isEqualTo(before);
+        newBlockedTime(blocked.owner(), blocked.businessId(), blocked.employeeId(), taken, endOfAppointment,
+                "Same span, different reason");
+
+        assertThat(availableStarts(blocked.owner(), blocked.businessId(), blocked.serviceId(),
+                        blocked.employeeId(), BOOKING_DATE))
+                .as("an appointment and a blocked time covering the same span must remove exactly "
+                        + "the same slots: appointments join the busy list rather than arriving by "
+                        + "a path of their own")
+                .isEqualTo(after);
+    }
 }
