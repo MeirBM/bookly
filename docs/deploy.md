@@ -64,12 +64,23 @@ names this as the thing to check before the deadline rather than on it.
    | `DATABASE_URL` | `jdbc:postgresql://${{Postgres.PGHOST}}:${{Postgres.PGPORT}}/${{Postgres.PGDATABASE}}` |
    | `DATABASE_USER` | `${{Postgres.PGUSER}}` |
    | `DATABASE_PASSWORD` | `${{Postgres.PGPASSWORD}}` |
-   | `REDIS_HOST` | `${{Redis.REDISHOST}}` |
-   | `REDIS_PORT` | `${{Redis.REDISPORT}}` |
+   | `SPRING_DATA_REDIS_URL` | `${{Redis.REDIS_URL}}` |
    | `JWT_SECRET` | generate with `openssl rand -base64 48` — paste into Railway, never into the repo |
    | `EXPOSE_API_DOCS` | `false` |
    | `FORWARD_HEADERS_STRATEGY` | `framework` |
    | `CORS_ALLOWED_ORIGINS` | set in step 3, once the frontend URL exists |
+
+   **Redis needs credentials, and `REDIS_HOST` plus `REDIS_PORT` do not carry them.** Railway's
+   Redis requires a password; connecting with a bare host and port is refused, and the failure is
+   quiet in a specific way — `/actuator/health` reports `DOWN`, the API keeps serving perfectly,
+   and the rate limiter fails open because that is what it is designed to do when the cache is
+   unreachable. Nothing about the API's behaviour reveals that a security control has stopped
+   applying. Setting `SPRING_DATA_REDIS_URL` from Railway's own `REDIS_URL` carries user, password,
+   host and port in one value, and Spring binds it by relaxed naming with no code change.
+
+   Verify it rather than assume it: send more requests than the limit in a minute and look for a
+   `429`. Seventy requests against a limit of sixty returning seventy `200`s is what a
+   disconnected Redis looks like from outside.
 
    **A Railway reference that does not resolve leaves the variable empty, not missing**, and an
    empty value defeats a default: `${REDIS_PORT:6379}` falls back to 6379 only when `REDIS_PORT`
