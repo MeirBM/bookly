@@ -121,7 +121,23 @@ drifts.
 | 2 | Services, employees, working hours, availability engine | complete — [audit](docs/audit/turn-2.md) |
 | 3 | Booking, concurrency, public booking page, deployment | [audit](docs/audit/turn-3.md) · 30/32 — the frontend is not deployed |
 
-Deployed API: **https://bookly-production-a85b.up.railway.app** — **backend only; the frontend is not deployed yet.**
+Deployed API: **https://bookly-production-a85b.up.railway.app** — backend only for now; the
+frontend deployment is in progress.
+
+**To use Bookly today**, run the frontend against the live API:
+
+```bash
+cd frontend
+NEXT_PUBLIC_API_URL=https://bookly-production-a85b.up.railway.app npm run dev
+```
+
+Open `http://localhost:3000`, register, create a business, add a service and an employee, link
+them and give the employee working hours. Then open `/book/{slug}` — in a private window, to see
+it as a customer with no account — and book a time. It appears in the dashboard's appointment list
+and calendar, and the slot disappears from the public page.
+
+That works because the deployed API allows `http://localhost:3000` by default and refuses other
+origins.
 
 Public booking page for a business is at `/book/{slug}`; the API is the same host.
 The deployment runbook, including three failures worth reading before repeating them,

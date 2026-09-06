@@ -120,18 +120,35 @@ curl -fsS https://<backend>.up.railway.app/actuator/health   # {"status":"UP",..
 
 ## 2. Frontend on Vercel
 
+Do this **after** the backend has a URL, and do step 3 after this one. The two halves each need the
+other's address, and doing them out of order produces a CORS failure that looks like a broken
+frontend rather than a missing variable.
+
 1. New project → import `MeirBM/bookly`.
 2. **Root Directory**: `frontend`. Vercel's equivalent setting is reliable; this is the only
    place one is needed.
-3. Environment variable `NEXT_PUBLIC_API_URL` = the Railway backend URL from step 1.
-   Next inlines this at build time, so it must be set *before* the first build, and changing it
-   later requires a redeploy rather than a restart.
+3. Environment variable `NEXT_PUBLIC_API_URL` = the Railway backend URL from step 1, with no
+   trailing slash — for this deployment, `https://bookly-production-a85b.up.railway.app`.
+
+   **Next inlines this at build time, not at runtime.** It must be set before the first build, and
+   changing it later needs a redeploy rather than a restart. A frontend built without it silently
+   falls back to `http://localhost:8080`, which fails only in the visitor's browser and looks like
+   the API being down.
 4. Deploy, and note the Vercel URL.
 
 ## 3. Close the loop
 
-Back on Railway, set `CORS_ALLOWED_ORIGINS` to the Vercel origin (e.g.
-`https://bookly-xyz.vercel.app` — scheme and host, no trailing slash) and redeploy the backend.
+Back on Railway, set `CORS_ALLOWED_ORIGINS` to the Vercel origin — scheme and host, **no trailing
+slash and no path**, e.g. `https://bookly-xyz.vercel.app` — and redeploy the backend.
+
+The value is a list, so both origins can be allowed at once while you are still working locally:
+
+```
+CORS_ALLOWED_ORIGINS="https://bookly-xyz.vercel.app,http://localhost:3000"
+```
+
+Its default is `http://localhost:3000` alone, which is why a locally-run frontend already reaches
+the deployed API and a deployed one will not until this is set.
 
 **This step is not optional and its absence is not obvious.** Without it every dashboard screen
 loads and then shows its error state, because the browser refuses the cross-origin call before the
