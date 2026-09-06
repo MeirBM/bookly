@@ -71,6 +71,22 @@ names this as the thing to check before the deadline rather than on it.
    | `FORWARD_HEADERS_STRATEGY` | `framework` |
    | `CORS_ALLOWED_ORIGINS` | set in step 3, once the frontend URL exists |
 
+   **A Railway reference that does not resolve leaves the variable empty, not missing**, and an
+   empty value defeats a default: `${REDIS_PORT:6379}` falls back to 6379 only when `REDIS_PORT`
+   is absent. Present-but-blank yields `""`, and the application refuses to start with
+
+   ```
+   Failed to bind properties under 'spring.data.redis.port' to int:
+       Value: "${REDIS_PORT:6379}"
+       Reason: A null value cannot be assigned to a primitive type
+   ```
+
+   The usual cause is a reference naming a service that does not exist under that name — check the
+   Redis service's actual name in the project and make `${{Redis.REDISPORT}}` match it, or delete
+   the variable entirely and let the default apply. **Deleting an empty variable is a fix; leaving
+   it blank is not.** The same applies to every `${{...}}` reference in the table above, so it is
+   worth expanding each one in the Railway UI and confirming it shows a value before deploying.
+
    `FORWARD_HEADERS_STRATEGY` is not cosmetic. Railway terminates TLS at its edge, so without it
    `getRemoteAddr()` returns the proxy's address and every visitor on the internet shares one
    rate-limit bucket — one shell loop of 61 requests would then return `429` to everybody for the
