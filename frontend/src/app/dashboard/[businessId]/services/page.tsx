@@ -2,24 +2,15 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { use, useState } from "react";
-import { useForm } from "react-hook-form";
-import { z } from "zod";
 import { AsyncSection } from "@/components/AsyncSection";
-import { Field, buttonClass, inputClass } from "@/components/Field";
+import { Field } from "@/components/Field";
 import { FormError } from "@/components/FormError";
+import { Button } from "@/components/ui/Button";
+import { Card } from "@/components/ui/Card";
+import { Input } from "@/components/ui/Input";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { ApiError, api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { zodResolver } from "@/lib/zod-resolver";
-
-const schema = z.object({
-  name: z.string().min(1, "Give the service a name.").max(120),
-  // Mirrors the server's bounds. The server still enforces them; this saves a round trip.
-  durationMinutes: z.coerce
-    .number()
-    .int("Use whole minutes.")
-    .min(1, "A service must take at least a minute.")
-    .max(1440, "Use 1440 minutes or fewer."),
-});
 
 export default function ServicesPage({ params }: { params: Promise<{ businessId: string }> }) {
   const { businessId } = use(params);
@@ -27,6 +18,8 @@ export default function ServicesPage({ params }: { params: Promise<{ businessId:
   const token = tokens?.accessToken ?? "";
   const queryClient = useQueryClient();
   const [failure, setFailure] = useState<string | null>(null);
+  const [name, setName] = useState("");
+  const [duration, setDuration] = useState("30");
 
   const services = useQuery({
     queryKey: ["services", businessId],
@@ -38,89 +31,106 @@ export default function ServicesPage({ params }: { params: Promise<{ businessId:
     void queryClient.invalidateQueries({ queryKey: ["services", businessId] });
     void queryClient.invalidateQueries({ queryKey: ["setup", businessId] });
   };
-
-  const { register, handleSubmit, reset, formState } = useForm<z.infer<typeof schema>>({
-    resolver: zodResolver(schema),
-    defaultValues: { name: "", durationMinutes: 30 },
-  });
+  const onError = (error: unknown) =>
+    setFailure(error instanceof ApiError ? error.body.message : "Could not reach the server.");
 
   const create = useMutation({
-    mutationFn: (values: z.infer<typeof schema>) => api.createService(token, businessId, values),
+    mutationFn: () =>
+      api.createService(token, businessId, {
+        name: name.trim(),
+        durationMinutes: Number(duration),
+      }),
     onSuccess: () => {
       setFailure(null);
-      reset();
+      setName("");
       invalidate();
     },
-    onError: (error) =>
-      setFailure(error instanceof ApiError ? error.body.message : "Could not reach the server."),
+    onError,
   });
 
   const remove = useMutation({
     mutationFn: (serviceId: string) => api.deleteService(token, businessId, serviceId),
     onSuccess: invalidate,
-    onError: (error) =>
-      setFailure(error instanceof ApiError ? error.body.message : "Could not reach the server."),
+    onError,
   });
 
   return (
     <div className="flex flex-col gap-8">
-      <section>
-        <h1 className="text-2xl font-semibold">Services</h1>
-        <div className="mt-4">
-          <AsyncSection
-            query={services}
-            label="services"
-            isEmpty={(data) => data.length === 0}
-            empty={
-              <>
-                No services yet. A service is what a customer books — a haircut, a session — and how
-                long it takes decides which slots can be offered.
-              </>
-            }
-          >
-            {(data) => (
-              <ul className="divide-y divide-slate-200 rounded-md border border-slate-200 bg-white">
-                {data.map((service) => (
-                  <li key={service.id} className="flex items-center justify-between px-4 py-3">
-                    <span>
-                      <span className="font-medium">{service.name}</span>
-                      <span className="ml-2 text-sm text-slate-600">
-                        {service.durationMinutes} min
-                      </span>
-                    </span>
-                    <button
-                      className="text-sm underline"
+      <PageHeader
+        title="Services"
+        description="How long a service takes is what decides which times can be offered, so the duration matters more than it looks."
+      />
+
+      <FormError message={failure} />
+
+      <AsyncSection
+        query={services}
+        label="services"
+        isEmpty={(data) => data.length === 0}
+        empty={
+          <>
+            No services yet. A service is what a customer books — a haircut, a session — and its
+            length decides which slots can be offered.
+          </>
+        }
+      >
+        {(data) => (
+          <ul className="flex flex-col gap-3">
+            {data.map((service) => (
+              <li key={service.id}>
+                <Card className="flex items-center justify-between gap-4" padded={false}>
+                  <div className="min-w-0 px-5 py-4">
+                    <p className="truncate font-medium text-ink">{service.name}</p>
+                    <p className="mt-0.5 text-sm text-ink-subtle">
+                      {service.durationMinutes} minutes
+                    </p>
+                  </div>
+                  <div className="px-5">
+                    <Button
+                      variant="danger"
+                      size="sm"
                       type="button"
                       onClick={() => remove.mutate(service.id)}
                     >
                       Remove
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </AsyncSection>
-        </div>
-      </section>
+                    </Button>
+                  </div>
+                </Card>
+              </li>
+            ))}
+          </ul>
+        )}
+      </AsyncSection>
 
-      <section>
-        <h2 className="text-lg font-semibold">Add a service</h2>
+      <Card>
+        <h2 className="text-lg font-semibold text-ink">Add a service</h2>
         <form
-          className="mt-4 flex flex-col gap-4"
-          onSubmit={handleSubmit((values) => create.mutate(values))}
+          className="mt-4 flex flex-col gap-4 sm:max-w-md"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (name.trim()) {
+              create.mutate();
+            }
+          }}
         >
-          <FormError message={failure} />
-          <Field label="Name" error={formState.errors.name?.message}>
-            <input className={inputClass} {...register("name")} />
+          <Field label="Name">
+            <Input value={name} onChange={(event) => setName(event.target.value)} required />
           </Field>
-          <Field label="Duration in minutes" error={formState.errors.durationMinutes?.message}>
-            <input className={inputClass} type="number" min={1} {...register("durationMinutes")} />
+          <Field label="Duration in minutes" hint="Whole minutes, and at least one.">
+            <Input
+              type="number"
+              min={1}
+              max={1440}
+              value={duration}
+              onChange={(event) => setDuration(event.target.value)}
+              required
+            />
           </Field>
-          <button className={buttonClass} type="submit" disabled={create.isPending}>
-            {create.isPending ? "Adding…" : "Add service"}
-          </button>
+          <Button type="submit" loading={create.isPending} disabled={!name.trim()}>
+            Add service
+          </Button>
         </form>
-      </section>
+      </Card>
     </div>
   );
 }

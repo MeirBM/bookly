@@ -3,8 +3,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { use, useState } from "react";
 import { AsyncSection } from "@/components/AsyncSection";
-import { inputClass } from "@/components/Field";
 import { FormError } from "@/components/FormError";
+import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
+import { Card } from "@/components/ui/Card";
+import { Input } from "@/components/ui/Input";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { ApiError, api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { useBusiness } from "@/lib/use-business";
@@ -57,28 +61,31 @@ export default function AppointmentsPage({
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-semibold">Appointments</h1>
+      <PageHeader
+        title="Appointments"
+        description={zone ? `Times shown in ${zone}.` : undefined}
+      />
 
-      <form className="flex flex-wrap items-end gap-3">
+      <Card className="flex flex-wrap items-end gap-4">
         <label className="text-sm">
-          <span className="block text-slate-700">From</span>
-          <input
-            className={inputClass}
+          <span className="mb-1.5 block font-medium text-ink">From</span>
+          <Input
+            className="w-44"
             type="date"
             value={from}
             onChange={(event) => setFrom(event.target.value)}
           />
         </label>
         <label className="text-sm">
-          <span className="block text-slate-700">To</span>
-          <input
-            className={inputClass}
+          <span className="mb-1.5 block font-medium text-ink">To</span>
+          <Input
+            className="w-44"
             type="date"
             value={to}
             onChange={(event) => setTo(event.target.value)}
           />
         </label>
-      </form>
+      </Card>
 
       <FormError message={failure} />
 
@@ -88,45 +95,52 @@ export default function AppointmentsPage({
         isEmpty={(data) => data.length === 0}
         empty={
           <>
-            No appointments in this range. Bookings made on your public page appear here as soon as
+            No appointments in this range. Bookings made on your public page appear here the moment
             they are taken.
           </>
         }
       >
         {(data) => (
           <ul
-            className="divide-y divide-slate-200 rounded-md border border-slate-200 bg-white"
+            className="flex flex-col gap-3"
             data-testid="appointment-list"
           >
-            {data.map((appointment) => (
-              <li key={appointment.id} className="flex items-center justify-between px-4 py-3">
-                <div>
-                  <p className="font-medium">
-                    {appointment.serviceName} · {appointment.customerName}
-                  </p>
-                  <p className="text-sm text-slate-600">
-                    {zone ? format(appointment.startsAt) : appointment.startsAt} ·{" "}
-                    {appointment.employeeName} ·{" "}
-                    <span
-                      className={
-                        appointment.status === "CANCELLED" ? "text-slate-500" : "text-slate-700"
-                      }
-                    >
-                      {appointment.status.toLowerCase()}
-                    </span>
-                  </p>
-                </div>
-                {appointment.status !== "CANCELLED" ? (
-                  <button
-                    className="text-sm underline"
-                    type="button"
-                    onClick={() => cancel.mutate(appointment.id)}
-                  >
-                    Cancel
-                  </button>
-                ) : null}
-              </li>
-            ))}
+            {data.map((appointment) => {
+              const cancelled = appointment.status === "CANCELLED";
+              return (
+                <li key={appointment.id}>
+                  <Card className="flex flex-wrap items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className={`font-medium ${cancelled ? "text-ink-subtle line-through" : "text-ink"}`}>
+                          {appointment.customerName}
+                        </p>
+                        <Badge tone={cancelled ? "neutral" : "success"}>
+                          {appointment.status.toLowerCase()}
+                        </Badge>
+                      </div>
+                      <p className="mt-1 text-sm text-ink-muted">
+                        {appointment.serviceName} with {appointment.employeeName}
+                      </p>
+                      <p className="mt-0.5 text-sm tabular-nums text-ink-subtle">
+                        {zone ? format(appointment.startsAt) : appointment.startsAt}
+                      </p>
+                    </div>
+                    {cancelled ? null : (
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        type="button"
+                        loading={cancel.isPending && cancel.variables === appointment.id}
+                        onClick={() => cancel.mutate(appointment.id)}
+                      >
+                        Cancel
+                      </Button>
+                    )}
+                  </Card>
+                </li>
+              );
+            })}
           </ul>
         )}
       </AsyncSection>
