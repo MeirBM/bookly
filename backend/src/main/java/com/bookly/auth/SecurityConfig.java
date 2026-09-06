@@ -8,8 +8,11 @@ import io.swagger.v3.oas.annotations.enums.SecuritySchemeType;
 import io.swagger.v3.oas.annotations.security.SecurityScheme;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -48,6 +51,8 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 @EnableMethodSecurity
 @EnableConfigurationProperties(JwtProperties.class)
 public class SecurityConfig {
+
+    private static final Logger log = LoggerFactory.getLogger(SecurityConfig.class);
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http,
@@ -133,7 +138,13 @@ public class SecurityConfig {
      */
     @Bean
     public CorsConfigurationSource corsConfigurationSource(
-            @Value("${bookly.cors.allowed-origins:http://localhost:3000}") List<String> origins) {
+            @Value("${bookly.cors.allowed-origins:http://localhost:3000}") String rawOrigins) {
+        List<String> origins = parseOrigins(rawOrigins);
+        // Logged because a wrong value here is invisible from the outside: every screen loads and
+        // then fails in the browser, while the API answers every request perfectly. One line at
+        // startup turns "the site is broken" into "the origin list is not what I thought".
+        log.info("CORS allows origins: {}", origins);
+
         CorsConfiguration configuration = new CorsConfiguration();
         configuration.setAllowedOrigins(origins);
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
@@ -144,6 +155,28 @@ public class SecurityConfig {
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/api/**", configuration);
         return source;
+    }
+
+    /**
+     * Splits the configured origins, tolerating how deployment platforms actually deliver values.
+     *
+     * <p>A platform variable arrives as one string, and it commonly arrives with stray quotes or
+     * spaces — a raw editor keeps the quotes it should strip, or a value gets pasted with a space
+     * after the comma. Binding straight to a list turns any of those into an origin that matches
+     * nothing, and the failure is total and silent: every browser call is refused while the API
+     * itself is healthy, so the frontend looks broken and the backend looks fine.
+     *
+     * <p>Trimming is normalisation, not leniency. An origin that differs by scheme, host or port is
+     * still refused, which is the property that matters.
+     */
+    private static List<String> parseOrigins(String raw) {
+        return Arrays.stream(raw.split(","))
+                .map(String::trim)
+                .map(origin -> origin.replaceAll("^[\"']+|[\"']+$", ""))
+                .map(origin -> origin.endsWith("/")
+                        ? origin.substring(0, origin.length() - 1) : origin)
+                .filter(origin -> !origin.isBlank())
+                .toList();
     }
 
     /**
