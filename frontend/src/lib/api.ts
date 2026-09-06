@@ -68,6 +68,56 @@ export type BlockedTime = {
 /** employeeIds is present even when one employee was requested, so the shape never changes. */
 export type AvailableSlot = { start: string; end: string; employeeIds: string[] };
 
+export type PublicService = {
+  id: string;
+  name: string;
+  durationMinutes: number;
+  priceMinor: number | null;
+};
+
+export type PublicEmployee = { id: string; name: string; serviceIds: string[] };
+
+export type PublicBusiness = {
+  slug: string;
+  name: string;
+  timezone: string;
+  services: PublicService[];
+  employees: PublicEmployee[];
+};
+
+export type PublicAvailability = {
+  serviceId: string;
+  date: string;
+  timezone: string;
+  stepMinutes: number;
+  slots: AvailableSlot[];
+};
+
+export type BookingConfirmation = {
+  id: string;
+  businessName: string;
+  serviceName: string;
+  employeeName: string;
+  startsAt: string;
+  endsAt: string;
+  timezone: string;
+  status: string;
+};
+
+export type Appointment = {
+  id: string;
+  serviceId: string;
+  serviceName: string | null;
+  employeeId: string;
+  employeeName: string | null;
+  startsAt: string;
+  endsAt: string;
+  status: string;
+  customerName: string | null;
+  customerEmail: string | null;
+  customerPhone: string | null;
+};
+
 export type Availability = {
   serviceId: string;
   date: string;
@@ -251,4 +301,50 @@ export const api = {
       { accessToken },
     );
   },
+
+  listAppointments: (accessToken: string, businessId: string, from: string, to: string) =>
+    request<Appointment[]>(
+      `/api/businesses/${businessId}/appointments?from=${from}&to=${to}`,
+      { accessToken },
+    ),
+
+  cancelAppointment: (accessToken: string, businessId: string, appointmentId: string) =>
+    request<Appointment>(
+      `/api/businesses/${businessId}/appointments/${appointmentId}/cancellation`,
+      { method: "POST", accessToken },
+    ),
+
+  // The public surface. No token by design: requiring an account is the friction the
+  // problem statement objects to.
+  publicBusiness: (slug: string) =>
+    request<PublicBusiness>(`/api/public/businesses/${encodeURIComponent(slug)}`),
+
+  publicAvailability: (
+    slug: string,
+    params: { serviceId: string; employeeId?: string; date: string },
+  ) => {
+    const query = new URLSearchParams({ serviceId: params.serviceId, date: params.date });
+    if (params.employeeId) {
+      query.set("employeeId", params.employeeId);
+    }
+    return request<PublicAvailability>(
+      `/api/public/businesses/${encodeURIComponent(slug)}/availability?${query.toString()}`,
+    );
+  },
+
+  publicBook: (
+    slug: string,
+    body: {
+      serviceId: string;
+      employeeId: string;
+      startsAt: string;
+      customerName: string;
+      customerEmail: string;
+      customerPhone?: string;
+    },
+  ) =>
+    request<BookingConfirmation>(
+      `/api/public/businesses/${encodeURIComponent(slug)}/appointments`,
+      { method: "POST", body },
+    ),
 };
