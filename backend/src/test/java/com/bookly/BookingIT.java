@@ -7,10 +7,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
+import org.springframework.test.context.TestPropertySource;
 
 /**
  * Turn-3 criteria 3.5, 3.6 and 3.9: what a booking is allowed to be.
@@ -19,7 +22,14 @@ import org.springframework.http.ResponseEntity;
  * the server re-derives availability rather than trusting what it was sent. The exclusion
  * constraint is the last line, not the first.
  */
+@TestPropertySource(properties = "bookly.booking.horizon-days=" + BookingIT.HORIZON_DAYS)
 class BookingIT extends ApiIntegrationTest {
+
+    /**
+     * Set here rather than left to the default, so this suite states its own premise. Wide enough
+     * that {@link #BOOKING_DATE}, which every other test in the class books on, stays inside it.
+     */
+    static final int HORIZON_DAYS = 60;
 
     private int appointmentCount(String businessId) {
         Integer count = jdbc().queryForObject(
@@ -154,5 +164,85 @@ class BookingIT extends ApiIntegrationTest {
                         ((java.sql.Timestamp) second.get("ends_at")).toInstant()))
                 .as("a booking made after the change takes the new duration")
                 .isEqualTo(Duration.ofMinutes(120));
+    }
+
+    // -------------------------------------------------------------------- 3.28
+
+    /**
+     * 3.28 — a booking that starts in the past is refused with 400.
+     *
+     * <p>The time chosen is one that <em>would</em> have been offered: the same hour on the same
+     * weekday as a bookable slot, two days ago. That is what makes the assertion about the past
+     * rather than about the grid, and the control at the end proves it — the identical wall-clock
+     * time inside the horizon books without complaint.
+     */
+    @Test
+    @DisplayName("3.28 a booking that starts in the past is refused with 400")
+    void refusesAPastStart() {
+        Bookable bookable = newBookableBusiness("past", 60);
+        ZoneId zone = ZoneId.of(bookable.timezone());
+        LocalDate twoDaysAgo = LocalDate.now(zone).minusDays(2);
+        Instant past = LocalTime.of(10, 0).atDate(twoDaysAgo).atZone(zone).toInstant();
+        assertThat(past).as("the fixture is only about the past if it is in the past").isBefore(Instant.now());
+
+        ResponseEntity<String> response =
+                book(bookable, bookable.employeeId(), past, UUID.randomUUID() + "@x.test");
+
+        assertThat(response.getStatusCode().value())
+                .as("a booking for %s cannot be honoured by anyone; accepting it puts a customer in "
+                        + "the diary for a morning that has already gone", past)
+                .isEqualTo(400);
+        assertThat(json(response).path("code").asText())
+                .as("the refusal names a code a client can branch on")
+                .isNotBlank();
+        assertThat(appointmentCount(bookable.businessId())).as("nothing was written").isZero();
+
+        assertThat(book(bookable, bookable.employeeId(), firstAvailableStart(bookable),
+                                UUID.randomUUID() + "@x.test")
+                        .getStatusCode()
+                        .value())
+                .as("the same hour of the same weekday, inside the horizon, is bookable — so the "
+                        + "refusal above was about the date and not about the time of day")
+                .isEqualTo(201);
+    }
+
+    /**
+     * 3.28 — a booking beyond the configured horizon is refused with 400.
+     *
+     * <p>A horizon exists so that a diary cannot be filled years ahead by anyone who feels like it,
+     * and so that a business is not held to a promise made before it knew its own opening hours.
+     * The boundary is asserted from both sides: just inside is accepted, well outside is not.
+     */
+    @Test
+    @DisplayName("3.28 a booking beyond the horizon is refused with 400")
+    void refusesBeyondTheHorizon() {
+        Bookable bookable = newBookableBusiness("horizon", 60);
+        ZoneId zone = ZoneId.of(bookable.timezone());
+        LocalDate wellBeyond = LocalDate.now(zone).plusDays(HORIZON_DAYS + 30);
+        Instant tooFar = LocalTime.of(10, 0).atDate(wellBeyond).atZone(zone).toInstant();
+
+        ResponseEntity<String> response =
+                book(bookable, bookable.employeeId(), tooFar, UUID.randomUUID() + "@x.test");
+
+        assertThat(response.getStatusCode().value())
+                .as("%s is %d days out against a horizon of %d; a diary open indefinitely is one "
+                        + "anybody can fill", tooFar, HORIZON_DAYS + 30, HORIZON_DAYS)
+                .isEqualTo(400);
+        assertThat(json(response).path("code").asText()).isNotBlank();
+        assertThat(appointmentCount(bookable.businessId())).as("nothing was written").isZero();
+
+        // Just inside the horizon is a different answer, or the horizon is not where it says it is.
+        LocalDate justInside = LocalDate.now(zone).plusDays(HORIZON_DAYS - 2);
+        List<Instant> insideStarts = availableStarts(
+                bookable.owner(), bookable.businessId(), bookable.serviceId(), bookable.employeeId(), justInside);
+        assertThat(insideStarts)
+                .as("a date inside the horizon is still offered by the engine")
+                .isNotEmpty();
+        assertThat(book(bookable, bookable.employeeId(), insideStarts.get(0), UUID.randomUUID() + "@x.test")
+                        .getStatusCode()
+                        .value())
+                .as("%s is inside the horizon and must be bookable, or the limit is stricter than "
+                        + "the configuration says", justInside)
+                .isEqualTo(201);
     }
 }

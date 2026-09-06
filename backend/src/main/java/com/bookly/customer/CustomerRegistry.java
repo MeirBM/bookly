@@ -36,15 +36,16 @@ public class CustomerRegistry {
                 .orElseGet(() -> create(businessId, fullName, trimmed, phone));
     }
 
+    /**
+     * Deliberately does not recover here.
+     *
+     * <p>The previous version caught the unique-key violation and re-read the row in the same
+     * transaction. PostgreSQL had already aborted that transaction, so the read failed with
+     * "current transaction is aborted, commands ignored" and escaped as a 500 — recovery attempted
+     * inside a transaction already poisoned. The retry has to happen in a *new* transaction, so it
+     * belongs to the caller, one level up, where this method can simply be invoked again.
+     */
     private UUID create(UUID businessId, String fullName, String email, String phone) {
-        try {
-            return customers.saveAndFlush(new Customer(businessId, fullName, email, phone)).getId();
-        } catch (DataIntegrityViolationException ex) {
-            // Somebody else inserted the same email between the read and the write. The row now
-            // exists, which is the outcome we wanted; a fresh transaction can read it.
-            return customers.findByBusinessIdAndEmailIgnoreCase(businessId, email)
-                    .map(Customer::getId)
-                    .orElseThrow(() -> ex);
-        }
+        return customers.saveAndFlush(new Customer(businessId, fullName, email, phone)).getId();
     }
 }

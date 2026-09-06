@@ -62,12 +62,11 @@ public class PublicBookingService {
                         service.getDurationMinutes(), service.getPriceMinor()))
                 .toList();
 
-        // Only people a visitor could actually book. Listing the rest published a staff roster
-        // to anonymous callers - a ten-person salon taking public bookings for one stylist was
-        // naming nine people who cannot be booked, to anyone who asked.
-        List<PublicEmployee> people = employees
-                .findByBusinessIdOrderByFullName(business.getId()).stream()
-                .filter(employee -> !employee.getServices().isEmpty())
+        // Only people a visitor could actually book - performing something is not enough, they
+        // must also work. Filtering on services alone still offered someone with no working hours,
+        // whose every date comes back empty: a dead end rather than a leak, but the criterion asks
+        // for people who can be booked, and listing the rest published a staff roster besides.
+        List<PublicEmployee> people = employees.findBookable(business.getId()).stream()
                 .map(employee -> new PublicEmployee(employee.getId(), employee.getFullName(),
                         employee.getServices().stream().map(ServiceOffering::getId).sorted()
                                 .toList()))

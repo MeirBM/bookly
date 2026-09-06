@@ -25,6 +25,11 @@ public interface EmployeeRepository extends JpaRepository<Employee, UUID> {
      * How many employees could actually take a booking: linked to at least one service *and*
      * working at some point in the week. Either alone is not enough to produce a slot.
      */
+    /** The people a visitor could actually book: they perform something and they work. */
+    @Query("select distinct e from Employee e join e.services s, WorkingHours w "
+            + "where e.businessId = :businessId and w.employeeId = e.id order by e.fullName")
+    List<Employee> findBookable(@Param("businessId") UUID businessId);
+
     @Query("select count(distinct e.id) from Employee e join e.services s, WorkingHours w "
             + "where e.businessId = :businessId and w.employeeId = e.id")
     long countBookable(@Param("businessId") UUID businessId);

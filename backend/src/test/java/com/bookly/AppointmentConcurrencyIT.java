@@ -165,4 +165,95 @@ class AppointmentConcurrencyIT extends ApiIntegrationTest {
                 .as("the codes a losing booking receives, per round: %s", observedCodes)
                 .allMatch(codes -> codes.equals(observedCodes.get(0)));
     }
+
+    /**
+     * 3.32 — two visitors sharing an email address, booking different free times at once, both
+     * succeed.
+     *
+     * <p>This is the case that used to answer 500. Two simultaneous bookings for one email race to
+     * create the same customer row, one loses the unique index, and a duplicate-key violation
+     * arriving as the same exception type as an overlap was reported as a double booking or as a
+     * server fault — pitfall 4. It is also the case whose fix caused the connection-pool deadlock
+     * that {@code exactlyOneOfManySimultaneousBookingsSucceeds} catches, so a regression here will
+     * take one of two shapes: a 5xx, or a hang. The bounded {@code get} below turns the second into
+     * a failure rather than a suite that never finishes.
+     *
+     * <p>One email being two people is ordinary: a couple booking two cuts, a parent booking for a
+     * child. Refusing the second is refusing a booking the business could have honoured, which
+     * part 1 says is the cheaper mistake — but answering 500 is not a refusal, it is a fault.
+     */
+    @Test
+    @DisplayName("3.32 two bookings sharing an email at different times both succeed")
+    void twoBookingsSharingAnEmailBothSucceed() throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            for (int round = 1; round <= ROUNDS; round++) {
+                Bookable bookable = newBookableBusiness("shared-email-" + round, 30);
+                List<java.time.Instant> starts = availableStarts(bookable.owner(), bookable.businessId(),
+                        bookable.serviceId(), bookable.employeeId(), BOOKING_DATE);
+                java.time.Instant first = starts.get(0);
+                java.time.Instant second = starts.stream()
+                        .filter(start -> !start.isBefore(first.plusSeconds(60L * bookable.durationMinutes())))
+                        .findFirst()
+                        .orElseThrow(() -> new AssertionError("no second, non-overlapping slot"));
+                String sharedEmail = "household-" + UUID.randomUUID() + "@example.test";
+
+                CountDownLatch ready = new CountDownLatch(2);
+                CountDownLatch release = new CountDownLatch(1);
+                List<Callable<ResponseEntity<String>>> attempts = List.of(first, second).stream()
+                        .<Callable<ResponseEntity<String>>>map(start -> () -> {
+                            Object payload = bookingBody(
+                                    bookable.serviceId(), bookable.employeeId(), start, sharedEmail);
+                            ready.countDown();
+                            release.await(20, TimeUnit.SECONDS);
+                            return post(
+                                    businessPath(bookable.businessId(), "/appointments"),
+                                    payload,
+                                    bookable.owner().accessToken());
+                        })
+                        .toList();
+
+                List<Future<ResponseEntity<String>>> futures = attempts.stream().map(pool::submit).toList();
+                assertThat(ready.await(20, TimeUnit.SECONDS))
+                        .as("round %d: both requests reached the start line", round)
+                        .isTrue();
+                release.countDown();
+
+                List<Integer> statuses = new ArrayList<>();
+                for (Future<ResponseEntity<String>> future : futures) {
+                    // Bounded on purpose: a deadlock is a failure, not a reason to wait for ever.
+                    statuses.add(future.get(60, TimeUnit.SECONDS).getStatusCode().value());
+                }
+
+                assertThat(statuses)
+                        .as("round %d: two different free times are two bookings the business can "
+                                + "honour, whoever the email belongs to", round)
+                        .containsExactly(201, 201);
+                assertThat(statuses)
+                        .as("round %d: and neither may be a server fault — one email is not an "
+                                + "error, it is a household", round)
+                        .noneMatch(status -> status >= 500);
+
+                Integer appointments = jdbc().queryForObject(
+                        "select count(*) from appointments where business_id = ?::uuid "
+                                + "and status in ('PENDING', 'CONFIRMED')",
+                        Integer.class,
+                        bookable.businessId());
+                assertThat(appointments).as("round %d: both bookings exist", round).isEqualTo(2);
+
+                Integer customers = jdbc().queryForObject(
+                        "select count(*) from customers where business_id = ?::uuid and lower(email) = lower(?)",
+                        Integer.class,
+                        bookable.businessId(),
+                        sharedEmail);
+                assertThat(customers)
+                        .as("round %d: one email is one customer of this business, even when two "
+                                + "requests created it at the same instant", round)
+                        .isEqualTo(1);
+            }
+        } finally {
+            pool.shutdownNow();
+            assertThat(pool.awaitTermination(30, TimeUnit.SECONDS)).as("pool shut down").isTrue();
+        }
+    }
 }

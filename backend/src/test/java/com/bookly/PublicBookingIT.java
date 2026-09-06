@@ -6,7 +6,10 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
 import com.bookly.support.ApiIntegrationTest;
 import com.bookly.support.Routes;
 import com.fasterxml.jackson.databind.JsonNode;
+import java.time.DayOfWeek;
 import java.time.Instant;
+import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -396,5 +399,337 @@ class PublicBookingIT extends ApiIntegrationTest {
             }
         }
         soft.assertAll();
+    }
+
+    // -------------------------------------------------------------------- 3.27
+
+    /**
+     * 3.27 — an anonymous booking may fill in a contact detail the customer does not have; it may
+     * never change one they do.
+     *
+     * <p>The original defect let any anonymous request rewrite a person's name and phone against
+     * every appointment they had ever made, from a form that asks for nothing but an email address.
+     * Anyone who guessed a customer's email could have replaced their phone number with their own,
+     * and the salon would have rung a stranger to confirm.
+     *
+     * <p>Written as an attack: the same email in a different case, an emptied name, and a rival
+     * phone number are all tried, and the stored row is read back after each.
+     */
+    @Test
+    @DisplayName("3.27 an anonymous booking cannot rewrite an existing customer's details")
+    void anonymousBookingCannotRewriteAnExistingCustomer() {
+        Bookable bookable = newBookableBusiness("rewrite", 30);
+        List<Instant> slots = availableStarts(bookable.owner(), bookable.businessId(), bookable.serviceId(),
+                bookable.employeeId(), BOOKING_DATE);
+        assertThat(slots.size()).as("enough room for several bookings").isGreaterThan(8);
+
+        String email = "victim-" + UUID.randomUUID() + "@example.test";
+        String realName = "Wilhelmina Quattrocchi";
+        String realPhone = "+972501111111";
+
+        assertThat(publicBook(bookable.slug(), body(
+                                "serviceId", bookable.serviceId(),
+                                "employeeId", bookable.employeeId(),
+                                "startsAt", slots.get(0).toString(),
+                                "customerName", realName,
+                                "customerEmail", email,
+                                "customerPhone", realPhone))
+                        .getStatusCode()
+                        .value())
+                .as("the customer's own first booking")
+                .isEqualTo(201);
+
+        record Attack(String what, String name, String email, String phone) {}
+        List<Attack> attacks = List.of(
+                new Attack("a rival name and phone on the same email",
+                        "Impostor Iago", email, "+972509999999"),
+                new Attack("the same email in a different case, in case the lookup folds but the "
+                        + "write does not",
+                        "Impostor Uppercase", email.toUpperCase(Locale.ROOT), "+972508888888"),
+                new Attack("a blank name, to see whether a customer can be erased rather than "
+                        + "replaced",
+                        "", email, "+972507777777"));
+
+        int slot = 2;
+        for (Attack attack : attacks) {
+            Map<String, Object> payload = body(
+                    "serviceId", bookable.serviceId(),
+                    "employeeId", bookable.employeeId(),
+                    "startsAt", slots.get(slot).toString(),
+                    "customerEmail", attack.email(),
+                    "customerPhone", attack.phone());
+            payload.put("customerName", attack.name());
+            publicBook(bookable.slug(), payload);
+            slot += 2;
+
+            Map<String, Object> stored = jdbc().queryForMap(
+                    "select full_name, phone from customers "
+                            + "where business_id = ?::uuid and lower(email) = lower(?)",
+                    bookable.businessId(),
+                    email);
+            assertThat(String.valueOf(stored.get("full_name")))
+                    .as("%s: the name a customer gave must survive it", attack.what())
+                    .isEqualTo(realName);
+            assertThat(String.valueOf(stored.get("phone")))
+                    .as("%s: so must the phone number the salon would ring", attack.what())
+                    .isEqualTo(realPhone);
+        }
+
+        Integer rows = jdbc().queryForObject(
+                "select count(*) from customers where business_id = ?::uuid and lower(email) = lower(?)",
+                Integer.class, bookable.businessId(), email);
+        assertThat(rows).as("one email is one customer of this business, whatever case it arrived in")
+                .isEqualTo(1);
+
+        // The owner's own list is where the rewrite would have done its damage.
+        ResponseEntity<String> owned = get(
+                businessPath(bookable.businessId(), "/appointments?from=" + BOOKING_DATE + "&to=" + BOOKING_DATE),
+                bookable.owner().accessToken());
+        assertThat(owned.getStatusCode().value()).isEqualTo(200);
+        json(owned).forEach(appointment -> {
+            assertThat(appointment.path("customerName").asText())
+                    .as("every appointment of this customer must still name them, including the "
+                            + "first one they made before anybody tried to overwrite it")
+                    .isEqualTo(realName);
+            assertThat(appointment.path("customerPhone").asText()).isEqualTo(realPhone);
+        });
+        assertThat(String.valueOf(owned.getBody()))
+                .as("and no attacker's details reached the owner's screen")
+                .doesNotContain("Impostor", "+972509999999", "+972508888888", "+972507777777");
+
+        // The half that is allowed: a detail the customer does not have may be filled in.
+        String sparse = "sparse-" + UUID.randomUUID() + "@example.test";
+        assertThat(publicBook(bookable.slug(), body(
+                                "serviceId", bookable.serviceId(),
+                                "employeeId", bookable.employeeId(),
+                                "startsAt", slots.get(slot).toString(),
+                                "customerName", "Sparse Sam",
+                                "customerEmail", sparse))
+                        .getStatusCode()
+                        .value())
+                .as("a booking with no phone number")
+                .isEqualTo(201);
+        String before = jdbc().queryForObject(
+                "select phone from customers where business_id = ?::uuid and lower(email) = lower(?)",
+                String.class, bookable.businessId(), sparse);
+        assertThat(before).as("nothing was stored for a phone that was never given").isNull();
+
+        assertThat(publicBook(bookable.slug(), body(
+                                "serviceId", bookable.serviceId(),
+                                "employeeId", bookable.employeeId(),
+                                "startsAt", slots.get(slot + 2).toString(),
+                                "customerName", "Sparse Sam",
+                                "customerEmail", sparse,
+                                "customerPhone", "+972506666666"))
+                        .getStatusCode()
+                        .value())
+                .as("the same customer supplying a phone number the second time")
+                .isEqualTo(201);
+        assertThat(jdbc().queryForObject(
+                        "select phone from customers where business_id = ?::uuid and lower(email) = lower(?)",
+                        String.class, bookable.businessId(), sparse))
+                .as("filling in a blank is not rewriting: the customer gains a phone number they "
+                        + "did not have, which is the point of asking for it again")
+                .isEqualTo("+972506666666");
+    }
+
+    // -------------------------------------------------------------------- 3.29
+
+    /** 3.29 — the roster names only people a visitor could actually book. */
+    @Test
+    @DisplayName("3.29 the public surface names only bookable people")
+    void publicSurfaceNamesOnlyBookablePeople() {
+        Bookable bookable = newBookableBusiness("roster", 30);
+
+        // Performs the service, but works no hours at all: nobody can book them.
+        String noHours = newEmployee(bookable.owner(), bookable.businessId(), "Rostered Never " + UUID.randomUUID())
+                .path("id")
+                .asText();
+        linkServices(bookable.owner(), bookable.businessId(), noHours, bookable.serviceId());
+
+        // Works every hour of the week, but performs nothing.
+        String performsNothing = newEmployee(bookable.owner(), bookable.businessId(),
+                        "Qualified For Nothing " + UUID.randomUUID())
+                .path("id")
+                .asText();
+        for (DayOfWeek weekday : DayOfWeek.values()) {
+            newWorkingHours(bookable.owner(), bookable.businessId(), performsNothing, weekday,
+                    "09:00:00", "17:00:00");
+        }
+
+        JsonNode business = json(publicBusiness(bookable.slug()));
+        List<String> named = new ArrayList<>();
+        business.path("employees").forEach(employee -> named.add(employee.path("id").asText()));
+
+        assertThat(named)
+                .as("the person who performs the service and works hours is bookable, so they are named")
+                .contains(bookable.employeeId());
+        assertThat(named)
+                .as("somebody who performs nothing cannot be booked for anything, and naming them "
+                        + "offers a visitor a choice that leads nowhere")
+                .doesNotContain(performsNothing);
+        assertThat(named)
+                .as("nor can somebody who works no hours: 3.29 says bookable means performing a "
+                        + "service *and* having hours")
+                .doesNotContain(noHours);
+
+        // Whoever is named must carry only services they really perform.
+        business.path("employees").forEach(employee -> {
+            List<String> performs = new ArrayList<>();
+            employee.path("serviceIds").forEach(id -> performs.add(id.asText()));
+            assertThat(performs)
+                    .as("%s is offered for services they do not perform", employee.path("name").asText())
+                    .containsExactly(bookable.serviceId());
+        });
+    }
+
+    /**
+     * 3.29 — a business nobody can serve at is refused exactly as an address that never existed.
+     *
+     * <p>This is the half {@code unknownAndUnbookableSlugsAreIndistinguishable} cannot reach: that
+     * test creates a business with nothing in it, and the interesting cases are the ones that look
+     * furnished — a service and a person, but the two never linked, or linked and never rostered.
+     */
+    @Test
+    @DisplayName("3.29 a business with nobody able to serve is not discoverable")
+    void aBusinessWithNobodyAbleToServeIsNotDiscoverable() {
+        Account owner = newAccount("undiscoverable");
+        ResponseEntity<String> unknown = publicBusiness("no-such-slug-" + UUID.randomUUID());
+
+        record Shape(String what, boolean link, boolean hours) {}
+        List<Shape> shapes = List.of(
+                new Shape("a service and a person who does not perform it", false, true),
+                new Shape("a person who performs it but works no hours", true, false),
+                new Shape("a person who neither performs it nor works", false, false));
+
+        SoftAssertions soft = new SoftAssertions();
+        for (Shape shape : shapes) {
+            JsonNode business = newBusiness(owner, "Half Set Up " + UUID.randomUUID(), "Asia/Jerusalem");
+            String businessId = business.path("id").asText();
+            String serviceId = newService(owner, businessId, "Service " + UUID.randomUUID(), 30)
+                    .path("id")
+                    .asText();
+            String employeeId = newEmployee(owner, businessId, "Employee " + UUID.randomUUID())
+                    .path("id")
+                    .asText();
+            if (shape.link()) {
+                linkServices(owner, businessId, employeeId, serviceId);
+            }
+            if (shape.hours()) {
+                for (DayOfWeek weekday : DayOfWeek.values()) {
+                    newWorkingHours(owner, businessId, employeeId, weekday, "09:00:00", "17:00:00");
+                }
+            }
+
+            ResponseEntity<String> response = publicBusiness(business.path("slug").asText());
+
+            soft.assertThat(response.getStatusCode())
+                    .as("%s: nobody can be booked here, so it must answer as an address that does "
+                            + "not exist", shape.what())
+                    .isEqualTo(unknown.getStatusCode());
+            soft.assertThat(response.getBody())
+                    .as("%s: byte for byte the same answer, or the difference is a directory of "
+                            + "who has an account", shape.what())
+                    .isEqualTo(unknown.getBody());
+        }
+        soft.assertAll();
+    }
+
+    // -------------------------------------------------------------------- 3.31
+
+    /**
+     * 3.31 — the difference between {@code SLOT_TAKEN} and {@code SLOT_NOT_AVAILABLE} must reveal
+     * nothing about times the availability surface would not have offered anyway.
+     *
+     * <p>Otherwise the booking endpoint is an oracle for a person's diary: an attacker who cannot
+     * see any availability at all can still ask "is this employee busy at 03:00 on Sunday?" and
+     * read the answer off the error code. The three probes below are all instants the public
+     * surface never offers — a service the employee does not perform, an hour outside their
+     * working window, and a day they do not work — and in each case the busy instant and the free
+     * instant must be answered identically.
+     */
+    @Test
+    @DisplayName("3.31 the two conflict codes reveal no occupancy")
+    void theTwoConflictCodesRevealNoOccupancy() {
+        Bookable bookable = newBookableBusiness("oracle", 60);
+        ZoneId zone = ZoneId.of(bookable.timezone());
+
+        // Genuinely busy at one instant the surface does offer, and free at another.
+        Instant busyOffered = firstAvailableStart(bookable);
+        bookOrFail(bookable, busyOffered, "occupant-" + UUID.randomUUID() + "@example.test");
+        Instant freeOffered = availableStarts(bookable.owner(), bookable.businessId(), bookable.serviceId(),
+                        bookable.employeeId(), BOOKING_DATE)
+                .stream()
+                .filter(start -> start.isAfter(busyOffered.plusSeconds(3600)))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no free slot left to compare against"));
+
+        // Busy and free outside the working window, where nothing is ever offered.
+        String customerId = jdbc().queryForObject(
+                "insert into customers (business_id, full_name, email) values (?::uuid, ?, ?) returning id::text",
+                String.class, bookable.businessId(), "Night Owl", "night-" + UUID.randomUUID() + "@x.test");
+        Instant busyAtNight = LocalTime.of(3, 0).atDate(BOOKING_DATE).atZone(zone).toInstant();
+        jdbc().update(
+                "insert into appointments "
+                        + "(business_id, employee_id, service_id, customer_id, starts_at, ends_at, status) "
+                        + "values (?::uuid, ?::uuid, ?::uuid, ?::uuid, ?, ?, 'CONFIRMED')",
+                bookable.businessId(), bookable.employeeId(), bookable.serviceId(), customerId,
+                java.sql.Timestamp.from(busyAtNight),
+                java.sql.Timestamp.from(busyAtNight.plusSeconds(3600)));
+        Instant freeAtNight = LocalTime.of(5, 0).atDate(BOOKING_DATE).atZone(zone).toInstant();
+
+        // A service this employee does not perform: nothing is offered for it at any hour.
+        String unperformedService = newService(bookable.owner(), bookable.businessId(),
+                        "Unperformed " + UUID.randomUUID(), 60)
+                .path("id")
+                .asText();
+
+        assertThat(publicAvailability(bookable.slug(), unperformedService, bookable.employeeId(), BOOKING_DATE)
+                        .getStatusCode()
+                        .value())
+                .as("the probe service is answerable")
+                .isEqualTo(200);
+
+        record Probe(String what, String serviceId, Instant busy, Instant free) {}
+        List<Probe> probes = List.of(
+                new Probe("a service the employee does not perform",
+                        unperformedService, busyOffered, freeOffered),
+                new Probe("an hour outside the working window",
+                        bookable.serviceId(), busyAtNight, freeAtNight),
+                new Probe("a service the employee does not perform, probed outside hours",
+                        unperformedService, busyAtNight, freeAtNight));
+
+        SoftAssertions soft = new SoftAssertions();
+        for (Probe probe : probes) {
+            ResponseEntity<String> whenBusy = probeBooking(bookable, probe.serviceId(), probe.busy());
+            ResponseEntity<String> whenFree = probeBooking(bookable, probe.serviceId(), probe.free());
+
+            soft.assertThat(whenBusy.getStatusCode())
+                    .as("%s: the status must not depend on whether the employee happens to be "
+                            + "busy at a time nobody was ever offered", probe.what())
+                    .isEqualTo(whenFree.getStatusCode());
+            soft.assertThat(json(whenBusy).path("code").asText())
+                    .as("%s: neither must the code. A caller who can tell these two apart can read "
+                            + "an employee's private diary one instant at a time", probe.what())
+                    .isEqualTo(json(whenFree).path("code").asText());
+            soft.assertThat(whenBusy.getBody())
+                    .as("%s: nor may the message differ", probe.what())
+                    .isEqualTo(whenFree.getBody());
+            soft.assertThat(whenBusy.getStatusCode().is2xxSuccessful())
+                    .as("%s: and neither probe may succeed — these are times the surface does not "
+                            + "offer", probe.what())
+                    .isFalse();
+        }
+        soft.assertAll();
+    }
+
+    private ResponseEntity<String> probeBooking(Bookable bookable, String serviceId, Instant startsAt) {
+        return publicBook(bookable.slug(), body(
+                "serviceId", serviceId,
+                "employeeId", bookable.employeeId(),
+                "startsAt", startsAt.toString(),
+                "customerName", "Probing Visitor",
+                "customerEmail", "probe-" + UUID.randomUUID() + "@example.test",
+                "customerPhone", "+972500000000"));
     }
 }

@@ -30,7 +30,16 @@ export default defineConfig({
     {
       // Requires DATABASE_URL, DATABASE_USER, DATABASE_PASSWORD and JWT_SECRET in the
       // environment, and Postgres and Redis reachable - `docker compose up -d postgres redis`.
-      // reuseExistingServer means a backend already running is used as-is.
+      //
+      //   set -a && . ../.env && set +a && npm run test:e2e
+      //
+      // Without them Playwright reports only "Process from config.webServer was not able to
+      // start. Exit code: 1", which names nothing useful - the application refuses to boot
+      // without a signing key, by design, and that refusal is what you are seeing.
+      //
+      // reuseExistingServer means a backend already running is used as-is - including one
+      // started without the raised limits below, in which case seeding hits the production
+      // rate limit and tests fail on 429 in milliseconds.
       command: "cd ../backend && ./mvnw -q -DskipTests spring-boot:run",
       url: "http://localhost:8080/actuator/health",
       reuseExistingServer: true,

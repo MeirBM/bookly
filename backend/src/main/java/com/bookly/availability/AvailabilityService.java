@@ -87,14 +87,43 @@ public class AvailabilityService {
     }
 
     /**
+     * Whether a start would be offered if nothing were booked — working hours, eligibility and
+     * blocked time only.
+     *
+     * <p>This is what separates "someone took it" from "that was never on offer", and asking it
+     * this way is what stops the two answers leaking a diary. The earlier version asked whether
+     * anyone was busy at the requested instant, which meant an anonymous caller could probe 03:00,
+     * watch the code flip, and read an employee's private appointments one hour at a time —
+     * including on days off, which the availability surface never discloses.
+     */
+    @Transactional(readOnly = true)
+    public boolean wouldOfferIgnoringBookings(UUID businessId, UUID serviceId, UUID employeeId,
+                                              LocalDate date, Instant start) {
+        return availableOnIgnoringBookings(businessId, serviceId, employeeId, date).slots().stream()
+                .anyMatch(slot -> slot.start().equals(start)
+                        && slot.employeeIds().contains(employeeId));
+    }
+
+    /**
      * @param ignoreAppointmentId an appointment not to count as busy, so a reschedule can be
      *                            offered times its own current booking overlaps. Without it,
      *                            moving an appointment by less than its own duration is always
      *                            refused — it collides with itself.
      */
+    private AvailabilityResponse availableOnIgnoringBookings(UUID businessId, UUID serviceId,
+                                                             UUID employeeId, LocalDate date) {
+        return compute(businessId, serviceId, employeeId, date, null, false);
+    }
+
     @Transactional(readOnly = true)
     public AvailabilityResponse availableOn(UUID businessId, UUID serviceId, UUID employeeId,
                                             LocalDate date, UUID ignoreAppointmentId) {
+        return compute(businessId, serviceId, employeeId, date, ignoreAppointmentId, true);
+    }
+
+    private AvailabilityResponse compute(UUID businessId, UUID serviceId, UUID employeeId,
+                                         LocalDate date, UUID ignoreAppointmentId,
+                                         boolean countBookings) {
         requireSaneDate(date);
         Business business = businesses.findById(businessId)
                 .orElseThrow(ApiException::noBusinessAccess);
@@ -129,10 +158,13 @@ public class AvailabilityService {
             List<BusyInterval> busy = new ArrayList<>();
             blockedTimes.findOverlapping(businessId, employee.getId(), dayStart, dayEnd)
                     .forEach(blocked -> busy.add(blocked.toBusyInterval()));
-            appointments.findOccupying(businessId, employee.getId(), dayStart, dayEnd).stream()
-                    .filter(appointment -> !appointment.getId().equals(ignoreAppointmentId))
-                    .forEach(appointment -> busy.add(
-                            new BusyInterval(appointment.getStartsAt(), appointment.getEndsAt())));
+            if (countBookings) {
+                appointments.findOccupying(businessId, employee.getId(), dayStart, dayEnd).stream()
+                        .filter(appointment -> !appointment.getId().equals(ignoreAppointmentId))
+                        .forEach(appointment -> busy.add(
+                                new BusyInterval(appointment.getStartsAt(),
+                                        appointment.getEndsAt())));
+            }
 
             for (Instant start : AvailabilityCalculator.startTimes(
                     date, zone, windows, busy, offering.getDuration(), step)) {

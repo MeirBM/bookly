@@ -89,8 +89,7 @@ public class BookingService {
         requireWithinHorizon(request.startsAt());
         requireOffered(businessId, business, service, employee.getId(), request.startsAt(), null);
 
-        UUID customerId = customers.findOrCreate(businessId, request.customerName().trim(),
-                request.customerEmail(), request.customerPhone());
+        UUID customerId = findOrCreateCustomer(businessId, request);
         Instant endsAt = request.startsAt().plus(service.getDuration());
 
         Appointment appointment = new Appointment(businessId, employee.getId(), service.getId(),
@@ -177,23 +176,39 @@ public class BookingService {
             // a time that was never on offer (outside working hours, an employee who does not
             // perform this service) and one that was on offer and has since been taken. Losing a
             // race is the second, and it is the case the booking page has to recover from.
-            // Only ask whether it is taken when it is a time this employee could otherwise have
-            // served. Probing occupancy for any instant made the pair of codes an existence
-            // oracle: pick a service the employee does not perform, guaranteeing an empty offer,
-            // and read back whether that person has an appointment at an arbitrary hour -
-            // including outside working hours and on days off, which availability never reveals.
-            Instant endsAt = startsAt.plus(service.getDuration());
-            boolean couldHaveServed =
-                    employeeDirectory.performs(businessId, employeeId, service.getId());
-            boolean taken = couldHaveServed && appointments
-                    .findOccupying(businessId, employeeId, startsAt, endsAt).stream()
-                    .anyMatch(existing -> !existing.getId().equals(ignoreAppointmentId));
+            // "Taken" means: this time would have been offered, and a booking is why it was
+            // not. Asking instead whether anyone is busy at the requested instant - which is what
+            // the first two versions did - turns the pair of codes into a diary. An anonymous
+            // caller could name a service the employee performs, probe 03:00, watch the code flip
+            // between SLOT_TAKEN and SLOT_NOT_AVAILABLE, and read out private appointments hour by
+            // hour, on days off included. Availability never discloses those, so neither may this.
+            boolean taken = availability.wouldOfferIgnoringBookings(
+                    businessId, service.getId(), employeeId, date, startsAt);
             if (taken) {
                 throw ApiException.conflict("SLOT_TAKEN",
                         "Someone just took that time. Please choose another.");
             }
             throw ApiException.conflict("SLOT_NOT_AVAILABLE",
                     "That time is not available. Please choose another.");
+        }
+    }
+
+    /**
+     * Finds or creates the customer, retrying once if another request created it first.
+     *
+     * <p>Each attempt is its own transaction — {@code CustomerRegistry} is {@code REQUIRES_NEW} and
+     * this method is not transactional — so the retry starts clean. That matters: two visitors
+     * sharing an email address and booking different free times at the same moment used to produce
+     * a 500, first because the duplicate was never caught and then because the recovery ran inside
+     * a transaction the database had already aborted.
+     */
+    private UUID findOrCreateCustomer(UUID businessId, CreateBooking request) {
+        try {
+            return customers.findOrCreate(businessId, request.customerName().trim(),
+                    request.customerEmail(), request.customerPhone());
+        } catch (DataIntegrityViolationException ex) {
+            return customers.findOrCreate(businessId, request.customerName().trim(),
+                    request.customerEmail(), request.customerPhone());
         }
     }
 
