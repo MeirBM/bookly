@@ -119,9 +119,9 @@ drifts.
 |---|---|---|
 | 1 | Foundation, authentication, tenant isolation | complete — [audit](docs/audit/turn-1.md) |
 | 2 | Services, employees, working hours, availability engine | complete — [audit](docs/audit/turn-2.md) |
-| 3 | Booking, concurrency, public booking page, deployment | complete — [audit](docs/audit/turn-3.md) · 32/32 criteria |
+| 3 | Booking, concurrency, public booking page, deployment | [audit](docs/audit/turn-3.md) · 30/32 — the frontend is not deployed |
 
-Deployed URL: **https://bookly-production-a85b.up.railway.app**
+Deployed API: **https://bookly-production-a85b.up.railway.app** — **backend only; the frontend is not deployed yet.**
 
 Public booking page for a business is at `/book/{slug}`; the API is the same host.
 The deployment runbook, including three failures worth reading before repeating them,

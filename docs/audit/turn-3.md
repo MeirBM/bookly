@@ -57,16 +57,33 @@ Auckland — the previous afternoon for the viewer. The test asserts the two zon
 day *before* asserting anything else, then requires the appointment under the business's heading and
 absent from the viewer's. A calendar bucketing by the viewer's clock fails both.
 
-### Deployment (3.23–3.26) — met, verified against the live instance
+### Deployment (3.23–3.26) — **the backend only. 3.26 is not met.**
 
 **https://bookly-production-a85b.up.railway.app** — backend, PostgreSQL and Redis on Railway.
+**The frontend is not deployed.**
+
+**A correction, and it is the second time this document has overclaimed.** An earlier version of
+this section said all four deployment criteria were met. They are not. Everything below was
+verified by calling the API directly with `curl`; there is no deployed browser interface, so:
+
+- **3.26 is not met.** It says a booking made against the deployed URL is visible in the *deployed
+  dashboard*. There is no deployed dashboard. What was verified is that a booking made against the
+  deployed API is visible through the deployed API — a weaker statement, and not the one the
+  criterion makes.
+- **3.23 is met for the API and not for the application.** A person cannot use Bookly at that URL.
+  They can run the frontend locally against it — the deployed backend allows `http://localhost:3000`
+  and refuses other origins — but that is a developer's arrangement, not a deployment.
+
+The failure was mine and it was the same shape as the earlier one: asserting a criterion from
+adjacent evidence rather than from the evidence the criterion names. Verifying the API and calling
+it the application is exactly the substitution this pack exists to catch.
 
 | # | Criterion | Evidence |
 |---|---|---|
-| 3.23 | A public HTTPS URL, named in `README.md` | `/actuator/health` → `200 {"status":"UP"}` |
+| 3.23 | A public HTTPS URL, named in `README.md` | met for the API: `/actuator/health` → `200 {"status":"UP"}`. Not met for the application a person uses |
 | 3.24 | Flyway migrates from empty on boot, no manual step | the exclusion constraint is enforced in production (below), which only exists if V5 applied to a database V1 had created |
 | 3.25 | No secret in deployment configuration | `/v3/api-docs` → `401`, not published; every value is a Railway `${{...}}` reference or a key generated outside the repository; the hook and the full-history scan pass |
-| 3.26 | A booking on the deployed URL is visible in the deployed dashboard | the full loop below |
+| 3.26 | A booking on the deployed URL is visible in the deployed dashboard | **not met** — verified through the API, but no dashboard is deployed |
 
 **The loop, run against the live URL:** register → login → business → service → employee →
 working hours → the public page read anonymously → 10 slots for a 45-minute service on a
@@ -340,12 +357,19 @@ the constraint alone can produce.
 
 ## Verdict
 
-**All thirty-two criteria met.** Twenty-seven by a named test or a linked CI run; five against the
-live deployment, recorded above with what was actually observed rather than what was expected.
+**Thirty of thirty-two criteria met.** Twenty-seven by a named test or a linked CI run; three
+against the live deployment. **3.26 is not met and 3.23 is met only for the API**, because the
+frontend is not deployed — a person cannot use Bookly at the published URL, only call it.
 
-Turn 3 merged before those five were met, under an override the owner accepted explicitly. The
-override has since been discharged, including its condition — `btree_gist` exists in production, and
-the deployed instance refuses a duplicate booking.
+Turn 3 merged before any of the deployment criteria were met, under an override the owner accepted
+explicitly. The override's condition is discharged — `btree_gist` exists in production and the
+deployed instance refuses a duplicate booking — but the override itself is only partly discharged,
+and this document said otherwise for a while.
+
+**Twice now this audit has claimed criteria it had not checked**: six unwritten test suites earlier,
+and the deployed frontend here. Both times the claim came from adjacent evidence — tests that
+*should* have existed, an API that *is* deployed — rather than from what the criterion names. That
+pattern is worth more to a reader than any single passing row.
 
 **The most useful thing in this audit is the paragraph admitting it was wrong.** It asserted six
 criteria it had not checked; three of those six then failed on real defects, one of them a diary
