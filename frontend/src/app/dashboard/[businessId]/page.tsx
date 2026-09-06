@@ -4,6 +4,8 @@ import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { use } from "react";
 import { AsyncSection } from "@/components/AsyncSection";
+import { LogoField } from "@/components/business/LogoField";
+import { BusinessAvatar } from "@/components/ui/BusinessAvatar";
 import { Card } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { api } from "@/lib/api";
@@ -42,6 +44,11 @@ export default function BusinessOverviewPage({
   return (
     <div className="flex flex-col gap-8">
       <PageHeader
+        leading={
+          business.data ? (
+            <BusinessAvatar src={business.data.logoUrl} name={business.data.name} />
+          ) : null
+        }
         title={business.data?.name ?? "Overview"}
         description={
           business.data ? (
@@ -152,6 +159,8 @@ export default function BusinessOverviewPage({
           );
         }}
       </AsyncSection>
+
+      {business.data ? <LogoField business={business.data} /> : null}
     </div>
   );
 }

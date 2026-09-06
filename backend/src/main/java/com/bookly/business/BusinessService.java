@@ -2,7 +2,10 @@ package com.bookly.business;
 
 import com.bookly.business.dto.BusinessResponse;
 import com.bookly.business.dto.CreateBusinessRequest;
+import com.bookly.business.dto.UpdateBusinessLogoRequest;
 import com.bookly.common.error.ApiException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.time.DateTimeException;
 import java.time.ZoneId;
 import java.util.List;
@@ -67,6 +70,49 @@ public class BusinessService {
         return businessRepository.findAllById(businessIds).stream()
                 .map(BusinessResponse::from)
                 .toList();
+    }
+
+    /**
+     * Sets or clears the business logo.
+     *
+     * <p>A blank body clears it rather than being rejected — "remove my logo" is a real thing an
+     * owner wants, and making them find a delete endpoint for it is friction with no payoff.
+     */
+    @Transactional
+    public BusinessResponse setLogo(UUID businessId, UpdateBusinessLogoRequest request) {
+        Business business = businessRepository.findById(businessId)
+                .orElseThrow(ApiException::noBusinessAccess);
+
+        String submitted = request.logoUrl() == null ? null : request.logoUrl().trim();
+        business.setLogoUrl(submitted == null || submitted.isEmpty() ? null : validateLogoUrl(submitted));
+
+        log.info("Logo {} for business {}",
+                business.getLogoUrl() == null ? "cleared" : "set", businessId);
+        return BusinessResponse.from(business);
+    }
+
+    /**
+     * Accepts only absolute {@code http} and {@code https} URLs.
+     *
+     * <p>This is an allow-list, not a block-list of {@code javascript:} and {@code data:}. A
+     * block-list of dangerous schemes is a list someone has to keep complete, and this string ends
+     * up in an {@code <img src>} on a page anyone can open. Two schemes are useful here; everything
+     * else is refused without needing to be enumerated.
+     */
+    private String validateLogoUrl(String candidate) {
+        try {
+            URI uri = new URI(candidate);
+            String scheme = uri.getScheme();
+            if (scheme == null || uri.getHost() == null
+                    || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))) {
+                throw ApiException.badRequest("INVALID_LOGO_URL",
+                        "A logo must be a full web address starting with http:// or https://.");
+            }
+            return candidate;
+        } catch (URISyntaxException ex) {
+            throw ApiException.badRequest("INVALID_LOGO_URL",
+                    "A logo must be a full web address starting with http:// or https://.");
+        }
     }
 
     private void validateTimezone(String timezone) {

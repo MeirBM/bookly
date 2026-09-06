@@ -28,6 +28,13 @@ public class Business {
     @Column(nullable = false)
     private String timezone;
 
+    /**
+     * An absolute {@code http(s)} URL, or null for a business that has not set one. Null is the
+     * normal state, not a defect: the frontend renders the Bookly mark rather than a gap.
+     */
+    @Column(name = "logo_url")
+    private String logoUrl;
+
     @Column(name = "created_at", insertable = false, updatable = false)
     private Instant createdAt;
 
@@ -58,5 +65,14 @@ public class Business {
 
     public String getTimezone() {
         return timezone;
+    }
+
+    public String getLogoUrl() {
+        return logoUrl;
+    }
+
+    /** @param logoUrl a validated absolute {@code http(s)} URL, or null to clear it */
+    public void setLogoUrl(String logoUrl) {
+        this.logoUrl = logoUrl;
     }
 }

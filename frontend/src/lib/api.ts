@@ -33,6 +33,8 @@ export type Business = {
   name: string;
   slug: string;
   timezone: string;
+  /** Absolute http(s) URL, or null for a business that has not set one. */
+  logoUrl: string | null;
 };
 
 export type UserSummary = { id: string; email: string; fullName: string };
@@ -81,6 +83,7 @@ export type PublicBusiness = {
   slug: string;
   name: string;
   timezone: string;
+  logoUrl: string | null;
   services: PublicService[];
   employees: PublicEmployee[];
 };
@@ -301,6 +304,13 @@ export const api = {
       { accessToken },
     );
   },
+
+  setBusinessLogo: (accessToken: string, businessId: string, logoUrl: string | null) =>
+    request<Business>(`/api/businesses/${businessId}/logo`, {
+      method: "PUT",
+      body: { logoUrl },
+      accessToken,
+    }),
 
   listAppointments: (accessToken: string, businessId: string, from: string, to: string) =>
     request<Appointment[]>(

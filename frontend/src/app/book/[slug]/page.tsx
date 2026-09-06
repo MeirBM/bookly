@@ -6,6 +6,7 @@ import { BookingConfirmation } from "@/components/booking/BookingConfirmation";
 import { BookingSteps } from "@/components/booking/BookingSteps";
 import { CustomerDetailsForm } from "@/components/booking/CustomerDetailsForm";
 import { SlotGrid } from "@/components/booking/SlotGrid";
+import { BusinessAvatar } from "@/components/ui/BusinessAvatar";
 import { FormError } from "@/components/FormError";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -155,13 +156,16 @@ export default function BookingPage({ params }: { params: Promise<{ slug: string
   return (
     <Shell>
       <header className="flex flex-col gap-3">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
-            {business.data.name}
-          </h1>
-          <p className="mt-1.5 text-sm text-ink-muted">
-            Book in a few taps — no account needed. Times shown in {zone}.
-          </p>
+        <div className="flex items-center gap-4">
+          <BusinessAvatar src={business.data.logoUrl} name={business.data.name} size="lg" />
+          <div className="min-w-0">
+            <h1 className="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
+              {business.data.name}
+            </h1>
+            <p className="mt-1.5 text-sm text-ink-muted">
+              Book in a few taps — no account needed. Times shown in {zone}.
+            </p>
+          </div>
         </div>
         <BookingSteps current={chosenSlot ? "Details" : "Time"} />
       </header>
