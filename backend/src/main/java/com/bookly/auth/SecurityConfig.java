@@ -86,6 +86,10 @@ public class SecurityConfig {
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/**").permitAll()
+                        // The customer-facing surface: no account, by design. Requiring one
+                        // is the friction the problem statement objects to. Held to its own
+                        // rate limit, and answering from its own DTOs.
+                        .requestMatchers("/api/public/**").permitAll()
                         // Both shapes: the business itself, and everything under it.
                         .requestMatchers("/api/businesses/{businessId}").access(tenantAccess)
                         .requestMatchers("/api/businesses/{businessId}/**").access(tenantAccess)

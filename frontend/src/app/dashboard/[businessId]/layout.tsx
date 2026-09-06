@@ -9,6 +9,8 @@ const TABS = [
   { href: "/services", label: "Services" },
   { href: "/employees", label: "Employees" },
   { href: "/availability", label: "Availability" },
+  { href: "/appointments", label: "Appointments" },
+  { href: "/calendar", label: "Calendar" },
 ];
 
 export default function BusinessLayout({

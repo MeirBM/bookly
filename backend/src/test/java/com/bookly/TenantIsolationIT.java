@@ -65,8 +65,12 @@ class TenantIsolationIT extends ApiIntegrationTest {
 
         List<Routes.Route> mustBeCovered = Routes.requiringIsolationCoverage(handlerMapping);
         assertThat(mustBeCovered)
-                .as("every route under /api/ that is not on the public allowlist %s; an empty set "
-                        + "means the criterion has nothing to decide", Routes.PUBLIC_PATTERNS)
+                .as("every route Routes classifies as %s; the unauthenticated entry points %s and "
+                        + "the public surface under %s carry their own expectations elsewhere. An "
+                        + "empty set here means the criterion has nothing to decide",
+                        Routes.Category.TENANT_SCOPED,
+                        Routes.UNAUTHENTICATED_ENTRY_PATTERNS,
+                        Routes.PUBLIC_PREFIX)
                 .isNotEmpty();
 
         List<DynamicTest> cases = new ArrayList<>();

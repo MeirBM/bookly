@@ -58,23 +58,28 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
     private static final Logger log = LoggerFactory.getLogger(RateLimitFilter.class);
     private static final String AUTH_PREFIX = "/api/auth/";
+    private static final String PUBLIC_PREFIX = "/api/public/";
     private static final String API_PREFIX = "/api/";
 
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
     private final int maxRequests;
     private final int apiMaxRequests;
+    private final int publicMaxRequests;
     private final Duration window;
 
     public RateLimitFilter(StringRedisTemplate redis,
                            ObjectMapper objectMapper,
                            @Value("${bookly.security.rate-limit.max-requests:20}") int maxRequests,
                            @Value("${bookly.security.rate-limit.api-max-requests:300}") int apiMaxRequests,
+                           @Value("${bookly.security.rate-limit.public-max-requests:60}")
+                           int publicMaxRequests,
                            @Value("${bookly.security.rate-limit.window:PT1M}") Duration window) {
         this.redis = redis;
         this.objectMapper = objectMapper;
         this.maxRequests = maxRequests;
         this.apiMaxRequests = apiMaxRequests;
+        this.publicMaxRequests = publicMaxRequests;
         this.window = window;
     }
 
@@ -88,14 +93,24 @@ public class RateLimitFilter extends OncePerRequestFilter {
                                     @NonNull HttpServletResponse response,
                                     @NonNull FilterChain chain)
             throws ServletException, IOException {
-        boolean authEndpoint = request.getRequestURI().startsWith(AUTH_PREFIX);
-        int limit = authEndpoint ? maxRequests : apiMaxRequests;
+        String uri = request.getRequestURI();
+        boolean authEndpoint = uri.startsWith(AUTH_PREFIX);
+        // The public surface carries the only unauthenticated write in the project, so it is
+        // metered by address and more tightly than the authenticated API - there is no principal
+        // to hold responsible, and a booking costs a database row and an availability computation.
+        boolean publicEndpoint = uri.startsWith(PUBLIC_PREFIX);
+        boolean anonymous = authEndpoint || publicEndpoint;
+        int limit = authEndpoint ? maxRequests : publicEndpoint ? publicMaxRequests : apiMaxRequests;
         // Unauthenticated endpoints are keyed on the address because there is no principal yet;
         // authenticated ones are keyed on the principal, so one account cannot multiply its
         // allowance by changing address, and one address does not throttle a shared office.
-        String key = "ratelimit:" + (authEndpoint
-                ? request.getRequestURI() + ":" + request.getRemoteAddr()
-                : "api:" + callerIdentity(request));
+        // One budget per caller per surface, not per endpoint. Keying an anonymous caller on the
+        // URI gave every public route its own allowance, so the three of them together permitted
+        // three times what the limit says — and the expensive one, booking, had a full budget of
+        // its own. The rule is now the same everywhere: the budget belongs to the caller.
+        String surface = authEndpoint ? "auth" : publicEndpoint ? "public" : "api";
+        String key = "ratelimit:" + surface + ":"
+                + (anonymous ? request.getRemoteAddr() : callerIdentity(request));
 
         Long count;
         try {

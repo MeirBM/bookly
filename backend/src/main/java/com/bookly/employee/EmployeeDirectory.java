@@ -59,6 +59,13 @@ public class EmployeeDirectory {
                 .toList();
     }
 
+    /** Whether this employee performs this service — the eligibility half of a slot's truth. */
+    @Transactional(readOnly = true)
+    public boolean performs(UUID businessId, UUID employeeId, UUID serviceId) {
+        return employees.findEligibleFor(businessId, serviceId).stream()
+                .anyMatch(employee -> employee.getId().equals(employeeId));
+    }
+
     @Transactional(readOnly = true)
     public Employee require(UUID businessId, UUID employeeId) {
         return employees.findByIdAndBusinessId(employeeId, businessId)

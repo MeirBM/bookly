@@ -119,6 +119,6 @@ drifts.
 |---|---|---|
 | 1 | Foundation, authentication, tenant isolation | complete — [audit](docs/audit/turn-1.md) |
 | 2 | Services, employees, working hours, availability engine | complete — [audit](docs/audit/turn-2.md) |
-| 3 | Booking, concurrency, public booking page, deployment | planned |
+| 3 | Booking, concurrency, public booking page | complete — [audit](docs/audit/turn-3.md) · deployment outstanding, accepted as an override |
 
-Deployed URL: _added in turn 3._
+Deployed URL: _pending — see [`docs/deploy.md`](docs/deploy.md) for the runbook._
