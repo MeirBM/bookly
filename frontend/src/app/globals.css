@@ -1,26 +1,124 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/*
+ * Bookly design tokens.
+ *
+ * The standard asks for roughly 80% calm neutral surface and 20% brand: energetic without being
+ * noisy. That balance is easier to hold if the neutrals are semantic — `surface`, `border`, `ink` —
+ * because a screen written in those names reads as structure, and reaching for a brand colour
+ * becomes a deliberate act rather than the path of least resistance.
+ */
+@theme {
+  /* Brand: indigo through violet. The workhorse — primary actions, selected states, focus. */
+  --color-brand-50: #eef2ff;
+  --color-brand-100: #e0e7ff;
+  --color-brand-200: #c7d2fe;
+  --color-brand-300: #a5b4fc;
+  --color-brand-400: #818cf8;
+  --color-brand-500: #6366f1;
+  --color-brand-600: #4f46e5;
+  --color-brand-700: #4338ca;
+  --color-brand-800: #3730a3;
+  --color-brand-900: #312e81;
+
+  /* Accent: magenta through coral. The warm end of the gradient, and highlights. Used sparingly. */
+  --color-accent-400: #e879f9;
+  --color-accent-500: #d946ef;
+  --color-accent-600: #c026d3;
+  --color-coral-400: #fb7185;
+  --color-coral-500: #f43f5e;
+
+  /* Neutrals, named for what they are rather than how dark they are. */
+  --color-surface: #ffffff;
+  --color-surface-subtle: #f8fafc;
+  --color-surface-muted: #f1f5f9;
+  --color-border: #e2e8f0;
+  --color-border-strong: #cbd5e1;
+  --color-ink: #0f172a;
+  --color-ink-muted: #475569;
+  --color-ink-subtle: #64748b;
+  --color-ink-faint: #94a3b8;
+
+  /* Feedback. Deliberately not brand colours: a failure must not look like a highlight. */
+  --color-danger-50: #fef2f2;
+  --color-danger-200: #fecaca;
+  --color-danger-600: #dc2626;
+  --color-danger-700: #b91c1c;
+  --color-success-50: #f0fdf4;
+  --color-success-200: #bbf7d0;
+  --color-success-700: #15803d;
+
+  /* Geist, loaded in the root layout. The previous stylesheet loaded these fonts and then set
+     body to Arial, so every page shipped the download and rendered without it. */
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+
+  --radius-sm: 0.375rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 0.875rem;
+  --radius-xl: 1.25rem;
+
+  /* Subtle by intent. The standard warns against excessive shadows; these read as a raised edge
+     rather than as a drop shadow. */
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.04), 0 1px 3px rgb(15 23 42 / 0.06);
+  --shadow-card-hover: 0 2px 4px rgb(15 23 42 / 0.06), 0 6px 16px rgb(15 23 42 / 0.08);
+  --shadow-pop: 0 8px 24px rgb(15 23 42 / 0.12);
+
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/*
+ * The brand gradient: indigo → violet → pink → coral, in that order.
+ * A utility rather than a repeated arbitrary value, so there is one gradient in the product and
+ * not five near-misses.
+ */
+@utility bg-brand-gradient {
+  background-image: linear-gradient(
+    135deg,
+    var(--color-brand-500) 0%,
+    #8b5cf6 38%,
+    var(--color-accent-500) 72%,
+    var(--color-coral-400) 100%
+  );
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+@utility text-brand-gradient {
+  background-image: linear-gradient(
+    135deg,
+    var(--color-brand-600) 0%,
+    var(--color-accent-500) 55%,
+    var(--color-coral-500) 100%
+  );
+  background-clip: text;
+  color: transparent;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--color-surface-subtle);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * One visible focus ring for everything, in the brand colour.
+ * The standard makes visible focus mandatory; a single rule means it cannot be forgotten on a
+ * component someone adds later.
+ */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-brand-500);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Respected globally rather than per-animation, so a new transition cannot opt out by omission. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
