@@ -27,8 +27,12 @@ names this as the thing to check before the deadline rather than on it.
 ## 1. Backend, PostgreSQL and Redis on Railway
 
 1. New project → **Deploy from GitHub repo** → `MeirBM/bookly`.
-2. **Set Root Directory to `backend` before deploying** (service → Settings → Source → Root
-   Directory). This is the step the build fails without, and the failure does not name it:
+2. **Leave Root Directory unset.** The backend builds from the repository root: `Dockerfile` and
+   `railway.json` are both there, and `railway.json` pins the builder to `DOCKERFILE` so nothing
+   has to be inferred.
+
+   This is deliberate, and it is the second arrangement rather than the first. The original
+   instruction was to set Root Directory to `backend`, and the build failed twice with:
 
    ```
    ✖ Railpack could not determine how to build the app.
@@ -39,16 +43,18 @@ names this as the thing to check before the deadline rather than on it.
      ...
    ```
 
-   That listing is the diagnosis — Railpack is looking at the repository root, sees two
-   applications and a pile of documentation, and cannot pick one. It is not a problem with the
-   Dockerfile or the code.
+   That listing is the diagnosis: Railpack was reading the repository root, saw two applications
+   and a pile of documentation, and could not pick one — the setting was not taking effect. A
+   deployment that depends on a platform setting behaving as documented is a deployment that fails
+   at the worst moment, so the build no longer depends on one.
 
-   With the root directory set, Railway finds `backend/railway.json`, which pins the builder to
-   `DOCKERFILE` rather than letting Railpack infer a Java build of its own. That matters: the
-   Dockerfile is the same image `docker compose` builds locally and the one the tests run against,
-   so pinning it keeps what is deployed identical to what was verified. It also sets the health
-   check to `/actuator/health`, so a container that boots but cannot reach the database is reported
-   as failed rather than counted as live.
+   There is **one** Dockerfile, at the root, and `docker-compose.yml` builds from the same context.
+   A second copy under `backend/` would be two files that must agree, and the image the tests ran
+   against has to be the image that ships or the tests verified something else.
+
+   `railway.json` also sets the health check to `/actuator/health`, so a container that boots but
+   cannot reach its database is reported as failed rather than counted as live — turn-3 pitfall 9,
+   where a deployed Flyway failure is invisible unless someone reads the log.
 3. Add **PostgreSQL** and **Redis** to the project (New → Database).
 4. On the backend service, set these variables. The `${{...}}` forms are Railway references, so
    nothing is copied by hand and nothing is written down here:
@@ -88,7 +94,8 @@ curl -fsS https://<backend>.up.railway.app/actuator/health   # {"status":"UP",..
 ## 2. Frontend on Vercel
 
 1. New project → import `MeirBM/bookly`.
-2. **Root Directory**: `frontend` — same reason as the backend, and the same failure without it.
+2. **Root Directory**: `frontend`. Vercel's equivalent setting is reliable; this is the only
+   place one is needed.
 3. Environment variable `NEXT_PUBLIC_API_URL` = the Railway backend URL from step 1.
    Next inlines this at build time, so it must be set *before* the first build, and changing it
    later requires a redeploy rather than a restart.

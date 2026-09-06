@@ -29,7 +29,11 @@ services:
       retries: 10
 
   backend:
-    build: ./backend
+    # Root context, matching what the deployment builds - so the image verified here is the
+    # image that ships, rather than a near-relation of it.
+    build:
+      context: .
+      dockerfile: Dockerfile
     environment:
       DATABASE_URL: jdbc:postgresql://postgres:5432/bookly
       DATABASE_USER: bookly

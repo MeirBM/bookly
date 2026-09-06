@@ -1,0 +1,15 @@
+# The build context is the whole repository now, so keep out everything the image never needs.
+.git
+.github
+.claude
+.githooks
+docs
+frontend
+node_modules
+**/node_modules
+**/target
+**/.next
+*.md
+.env
+.env.*
+!.env.example
