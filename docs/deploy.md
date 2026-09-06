@@ -42,7 +42,15 @@ names this as the thing to check before the deadline rather than on it.
    | `REDIS_PORT` | `${{Redis.REDISPORT}}` |
    | `JWT_SECRET` | generate with `openssl rand -base64 48` — paste into Railway, never into the repo |
    | `EXPOSE_API_DOCS` | `false` |
+   | `FORWARD_HEADERS_STRATEGY` | `framework` |
    | `CORS_ALLOWED_ORIGINS` | set in step 3, once the frontend URL exists |
+
+   `FORWARD_HEADERS_STRATEGY` is not cosmetic. Railway terminates TLS at its edge, so without it
+   `getRemoteAddr()` returns the proxy's address and every visitor on the internet shares one
+   rate-limit bucket — one shell loop of 61 requests would then return `429` to everybody for the
+   rest of the window, and the booking page is down. It is off by default precisely because
+   enabling it *without* a trusted proxy in front lets a caller spoof `X-Forwarded-For` and mint
+   itself an unlimited allowance. Only ever set it where something else sets that header.
 
    `DATABASE_URL` is deliberately the JDBC form. Railway's own `DATABASE_URL` is a
    `postgresql://user:pass@host/db` connection string, which Spring's datasource does not accept —

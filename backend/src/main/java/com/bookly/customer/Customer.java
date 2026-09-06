@@ -70,9 +70,20 @@ public class Customer {
         return phone;
     }
 
-    public void updateContactDetails(String fullName, String phone) {
-        this.fullName = fullName;
-        if (phone != null && !phone.isBlank()) {
+    /**
+     * Fills in details that are missing, and never replaces details that are present.
+     *
+     * <p>The first version overwrote both. Booking is anonymous and keyed on an unverified email,
+     * so anyone who could guess a client's address could rewrite that client's row — and because
+     * the owner's list joins the customer by id, the attacker's name and phone would then appear
+     * against every appointment that person had ever had, past and future, with the real phone
+     * number gone rather than shadowed. One valid booking was the whole cost.
+     *
+     * <p>Filling blanks is still useful: a customer who first booked without a phone can add one.
+     * Changing details that already exist is the owner's to do, not a stranger's.
+     */
+    public void fillMissingContactDetails(String phone) {
+        if ((this.phone == null || this.phone.isBlank()) && phone != null && !phone.isBlank()) {
             this.phone = phone;
         }
     }

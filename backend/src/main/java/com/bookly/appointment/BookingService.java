@@ -6,19 +6,21 @@ import com.bookly.availability.dto.AvailabilityDtos.AvailableSlot;
 import com.bookly.business.Business;
 import com.bookly.business.BusinessRepository;
 import com.bookly.common.error.ApiException;
-import com.bookly.customer.Customer;
-import com.bookly.customer.CustomerRepository;
+import com.bookly.customer.CustomerRegistry;
 import com.bookly.employee.Employee;
 import com.bookly.employee.EmployeeDirectory;
 import com.bookly.service.ServiceCatalog;
 import com.bookly.service.ServiceOffering;
 import com.bookly.appointment.dto.BookingRequests.CreateBooking;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,12 +39,12 @@ public class BookingService {
 
     private static final Logger log = LoggerFactory.getLogger(BookingService.class);
 
-    /** The constraint whose violation means "someone else took this slot", not "bad data". */
-    private static final String OVERLAP_CONSTRAINT = "appointments_no_overlap";
-
     private final AppointmentRepository appointments;
     private final AppointmentStatusChangeRepository history;
-    private final CustomerRepository customers;
+    private final AppointmentWriter writer;
+    private final CustomerRegistry customers;
+    private final Clock clock;
+    private final int horizonDays;
     private final BusinessRepository businesses;
     private final ServiceCatalog serviceCatalog;
     private final EmployeeDirectory employeeDirectory;
@@ -50,38 +52,51 @@ public class BookingService {
 
     public BookingService(AppointmentRepository appointments,
                           AppointmentStatusChangeRepository history,
-                          CustomerRepository customers,
+                          AppointmentWriter writer,
+                          CustomerRegistry customers,
                           BusinessRepository businesses,
                           ServiceCatalog serviceCatalog,
                           EmployeeDirectory employeeDirectory,
-                          AvailabilityService availability) {
+                          AvailabilityService availability,
+                          Clock clock,
+                          @Value("${bookly.booking.horizon-days:120}") int horizonDays) {
         this.appointments = appointments;
         this.history = history;
+        this.writer = writer;
         this.customers = customers;
         this.businesses = businesses;
         this.serviceCatalog = serviceCatalog;
         this.employeeDirectory = employeeDirectory;
         this.availability = availability;
+        this.clock = clock;
+        this.horizonDays = horizonDays;
     }
 
-    @Transactional
+    /**
+     * Deliberately not {@code @Transactional}.
+     *
+     * <p>The customer must be found or created in its own transaction, and that transaction has to
+     * complete before the appointment's begins. Nested, each booking held two pooled connections
+     * and twenty concurrent requests deadlocked a pool of ten until the connection timeout. The
+     * appointment and its first audit row still share one transaction, in {@link AppointmentWriter}.
+     */
     public Appointment book(UUID businessId, CreateBooking request) {
         Business business = businesses.findById(businessId)
                 .orElseThrow(ApiException::noBusinessAccess);
         ServiceOffering service = serviceCatalog.require(businessId, request.serviceId());
         Employee employee = employeeDirectory.require(businessId, request.employeeId());
 
-        requireOffered(businessId, business, service, employee.getId(), request.startsAt());
+        requireWithinHorizon(request.startsAt());
+        requireOffered(businessId, business, service, employee.getId(), request.startsAt(), null);
 
-        Customer customer = findOrCreateCustomer(businessId, request);
+        UUID customerId = customers.findOrCreate(businessId, request.customerName().trim(),
+                request.customerEmail(), request.customerPhone());
         Instant endsAt = request.startsAt().plus(service.getDuration());
 
         Appointment appointment = new Appointment(businessId, employee.getId(), service.getId(),
-                customer.getId(), request.startsAt(), endsAt, AppointmentStatus.CONFIRMED);
+                customerId, request.startsAt(), endsAt, AppointmentStatus.CONFIRMED);
 
-        Appointment saved = saveOrReportTaken(appointment);
-        history.save(new AppointmentStatusChange(
-                saved.getId(), null, AppointmentStatus.CONFIRMED, "booked"));
+        Appointment saved = writer.create(appointment);
         log.info("Booked appointment {} for business {} employee {}",
                 saved.getId(), businessId, employee.getId());
         return saved;
@@ -108,7 +123,6 @@ public class BookingService {
      * old slot, fail to take the new one, and leave the customer with nothing — criterion 3.7 is
      * written against that failure.
      */
-    @Transactional
     public Appointment reschedule(UUID businessId, UUID appointmentId, Instant newStart,
                                   UUID newEmployeeId) {
         Appointment appointment = require(businessId, appointmentId);
@@ -122,13 +136,13 @@ public class BookingService {
         UUID employeeId = newEmployeeId != null ? newEmployeeId : appointment.getEmployeeId();
         employeeDirectory.require(businessId, employeeId);
 
-        requireOffered(businessId, business, service, employeeId, newStart);
+        requireWithinHorizon(newStart);
+        // Ignoring this appointment's own interval. Counting it as busy meant moving something
+        // by less than its own duration was always refused, and reported as SLOT_TAKEN - the
+        // owner was told an invisible customer held a time only they themselves occupied.
+        requireOffered(businessId, business, service, employeeId, newStart, appointment.getId());
 
-        appointment.moveTo(newStart, newStart.plus(service.getDuration()));
-        Appointment saved = saveOrReportTaken(appointment);
-        history.save(new AppointmentStatusChange(saved.getId(), saved.getStatus(),
-                saved.getStatus(), "rescheduled"));
-        return saved;
+        return writer.move(appointment.getId(), newStart, newStart.plus(service.getDuration()));
     }
 
     @Transactional(readOnly = true)
@@ -147,11 +161,11 @@ public class BookingService {
      * overlaps.
      */
     private void requireOffered(UUID businessId, Business business, ServiceOffering service,
-                                UUID employeeId, Instant startsAt) {
+                                UUID employeeId, Instant startsAt, UUID ignoreAppointmentId) {
         ZoneId zone = ZoneId.of(business.getTimezone());
         LocalDate date = startsAt.atZone(zone).toLocalDate();
-        AvailabilityResponse offered =
-                availability.availableOn(businessId, service.getId(), employeeId, date);
+        AvailabilityResponse offered = availability.availableOn(
+                businessId, service.getId(), employeeId, date, ignoreAppointmentId);
 
         boolean matches = offered.slots().stream()
                 .filter(slot -> slot.employeeIds().contains(employeeId))
@@ -163,9 +177,17 @@ public class BookingService {
             // a time that was never on offer (outside working hours, an employee who does not
             // perform this service) and one that was on offer and has since been taken. Losing a
             // race is the second, and it is the case the booking page has to recover from.
+            // Only ask whether it is taken when it is a time this employee could otherwise have
+            // served. Probing occupancy for any instant made the pair of codes an existence
+            // oracle: pick a service the employee does not perform, guaranteeing an empty offer,
+            // and read back whether that person has an appointment at an arbitrary hour -
+            // including outside working hours and on days off, which availability never reveals.
             Instant endsAt = startsAt.plus(service.getDuration());
-            boolean taken = !appointments
-                    .findOccupying(businessId, employeeId, startsAt, endsAt).isEmpty();
+            boolean couldHaveServed =
+                    employeeDirectory.performs(businessId, employeeId, service.getId());
+            boolean taken = couldHaveServed && appointments
+                    .findOccupying(businessId, employeeId, startsAt, endsAt).stream()
+                    .anyMatch(existing -> !existing.getId().equals(ignoreAppointmentId));
             if (taken) {
                 throw ApiException.conflict("SLOT_TAKEN",
                         "Someone just took that time. Please choose another.");
@@ -176,48 +198,20 @@ public class BookingService {
     }
 
     /**
-     * @throws ApiException 409 when the exclusion constraint refuses the row, which means someone
-     *         else took the slot between the availability check and the insert — the race this
-     *         whole design exists to make safe. Distinguished by constraint name: a duplicate
-     *         customer email arrives as the same exception type, and reporting that as a double
-     *         booking would send a customer looking for a conflict that does not exist.
+     * Refuses a booking outside the window a business plausibly takes.
+     *
+     * <p>Nothing bounded this before, in either direction: an anonymous caller could write an
+     * appointment into 2019 or 2099. A past booking has no honest caller at all, and an unbounded
+     * future is what makes booking out every slot of every year a matter of patience.
      */
-    private Appointment saveOrReportTaken(Appointment appointment) {
-        try {
-            return appointments.saveAndFlush(appointment);
-        } catch (DataIntegrityViolationException ex) {
-            if (mentions(ex, OVERLAP_CONSTRAINT)) {
-                log.info("Booking lost the race for employee {} at {}",
-                        appointment.getEmployeeId(), appointment.getStartsAt());
-                throw ApiException.conflict("SLOT_TAKEN",
-                        "Someone just took that time. Please choose another.");
-            }
-            throw ex;
+    private void requireWithinHorizon(Instant startsAt) {
+        Instant now = clock.instant();
+        if (startsAt.isBefore(now)) {
+            throw ApiException.badRequest("START_IN_THE_PAST", "That time has already passed.");
         }
-    }
-
-    private static boolean mentions(Throwable error, String needle) {
-        for (Throwable current = error; current != null; current = current.getCause()) {
-            String message = current.getMessage();
-            if (message != null && message.contains(needle)) {
-                return true;
-            }
-            if (current.getCause() == current) {
-                break;
-            }
+        if (startsAt.isAfter(now.plus(Duration.ofDays(horizonDays)))) {
+            throw ApiException.badRequest("BEYOND_BOOKING_HORIZON",
+                    "That date is too far ahead to book.");
         }
-        return false;
-    }
-
-    private Customer findOrCreateCustomer(UUID businessId, CreateBooking request) {
-        String email = request.customerEmail().trim();
-        return customers.findByBusinessIdAndEmailIgnoreCase(businessId, email)
-                .map(existing -> {
-                    existing.updateContactDetails(
-                            request.customerName().trim(), request.customerPhone());
-                    return existing;
-                })
-                .orElseGet(() -> customers.save(new Customer(businessId,
-                        request.customerName().trim(), email, request.customerPhone())));
     }
 }

@@ -83,6 +83,18 @@ public class AvailabilityService {
     @Transactional(readOnly = true)
     public AvailabilityResponse availableOn(UUID businessId, UUID serviceId, UUID employeeId,
                                             LocalDate date) {
+        return availableOn(businessId, serviceId, employeeId, date, null);
+    }
+
+    /**
+     * @param ignoreAppointmentId an appointment not to count as busy, so a reschedule can be
+     *                            offered times its own current booking overlaps. Without it,
+     *                            moving an appointment by less than its own duration is always
+     *                            refused — it collides with itself.
+     */
+    @Transactional(readOnly = true)
+    public AvailabilityResponse availableOn(UUID businessId, UUID serviceId, UUID employeeId,
+                                            LocalDate date, UUID ignoreAppointmentId) {
         requireSaneDate(date);
         Business business = businesses.findById(businessId)
                 .orElseThrow(ApiException::noBusinessAccess);
@@ -117,7 +129,8 @@ public class AvailabilityService {
             List<BusyInterval> busy = new ArrayList<>();
             blockedTimes.findOverlapping(businessId, employee.getId(), dayStart, dayEnd)
                     .forEach(blocked -> busy.add(blocked.toBusyInterval()));
-            appointments.findOccupying(businessId, employee.getId(), dayStart, dayEnd)
+            appointments.findOccupying(businessId, employee.getId(), dayStart, dayEnd).stream()
+                    .filter(appointment -> !appointment.getId().equals(ignoreAppointmentId))
                     .forEach(appointment -> busy.add(
                             new BusyInterval(appointment.getStartsAt(), appointment.getEndsAt())));
 

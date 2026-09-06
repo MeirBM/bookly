@@ -62,8 +62,12 @@ public class PublicBookingService {
                         service.getDurationMinutes(), service.getPriceMinor()))
                 .toList();
 
+        // Only people a visitor could actually book. Listing the rest published a staff roster
+        // to anonymous callers - a ten-person salon taking public bookings for one stylist was
+        // naming nine people who cannot be booked, to anyone who asked.
         List<PublicEmployee> people = employees
                 .findByBusinessIdOrderByFullName(business.getId()).stream()
+                .filter(employee -> !employee.getServices().isEmpty())
                 .map(employee -> new PublicEmployee(employee.getId(), employee.getFullName(),
                         employee.getServices().stream().map(ServiceOffering::getId).sorted()
                                 .toList()))
@@ -122,8 +126,12 @@ public class PublicBookingService {
     private Business requireBookable(String slug) {
         Business business = businesses.findBySlug(slug)
                 .orElseThrow(PublicBookingService::notBookable);
-        boolean hasSomethingToBook = services.countByBusinessId(business.getId()) > 0
-                && employees.countByBusinessId(business.getId()) > 0;
+        // Criterion 3.17 says "no services, or nobody to perform them". Counting rows was
+        // weaker than that: a business with a service and an employee who were never linked, or
+        // who has no working hours, cannot produce a single slot - and that is the normal
+        // intermediate state of a business being set up across separate dashboard screens. It
+        // stayed publicly discoverable, name and price list included, having never opened.
+        boolean hasSomethingToBook = employees.countBookable(business.getId()) > 0;
         if (!hasSomethingToBook) {
             throw notBookable();
         }

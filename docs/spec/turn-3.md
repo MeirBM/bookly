@@ -73,6 +73,17 @@ cannot be honoured costs a person standing in a shop that has no room for them.
 | 3.25 | No secret is present in any deployment configuration committed to the repository | `.githooks/pre-commit`, the CI secret scan, and inspection of the deploy config |
 | 3.26 | A booking made against the deployed URL is visible in the deployed dashboard | manual, recorded in the audit |
 
+### Controls the security review added
+
+| # | Criterion | Decided by |
+|---|---|---|
+| 3.27 | An anonymous booking never changes contact details an existing customer already has; it may only fill in ones that are missing | `PublicBookingIT.anonymousBookingCannotRewriteAnExistingCustomer` |
+| 3.28 | A booking is refused with 400 if it starts in the past, or beyond the configured horizon | `BookingIT.refusesAPastStart`, `.refusesBeyondTheHorizon` |
+| 3.29 | The public surface names only people a visitor could book, and "bookable" requires somebody who performs a service **and** has working hours | `PublicBookingIT.publicSurfaceNamesOnlyBookablePeople`, `.aBusinessWithNobodyAbleToServeIsNotDiscoverable` |
+| 3.30 | Behind a proxy, the rate limiter keys on the client's address rather than the proxy's, so one caller cannot exhaust everyone's allowance | reasoned in the audit against the deployed configuration; not decidable by a suite whose requests all originate from one address |
+| 3.31 | The distinction between `SLOT_TAKEN` and `SLOT_NOT_AVAILABLE` reveals nothing about times the availability surface would not have offered anyway | `PublicBookingIT.theTwoConflictCodesRevealNoOccupancy` |
+| 3.32 | Two visitors sharing an email address, booking different free times at once, both succeed — neither receives a server error | `AppointmentConcurrencyIT.twoBookingsSharingAnEmailBothSucceed` |
+
 **Not claimed by this turn:** payments, notifications of any kind, customer accounts, recurring
 appointments, and the mobile clients. All are on the out-of-scope list in `docs/framing.md` with
 their reasons.
@@ -154,7 +165,7 @@ the deployed frontend origin, or the deployed dashboard breaks exactly as it did
 
 ## Definition of done for this turn
 
-All twenty-six criteria in part 2 are true, `docs/audit/turn-3.md` records the five Merge-Readiness
+All thirty-two criteria in part 2 are true, `docs/audit/turn-3.md` records the five Merge-Readiness
 criteria with evidence, the branch merges to `main` with CI green, and `README.md` names a URL a
 reader can open.
 
@@ -165,4 +176,5 @@ reader can open.
 | Date | Change |
 |---|---|
 | 2026-09-05 | First version, written before any implementation commit. |
+| 2026-09-06 | Six criteria added after the security review, which found three HIGH defects in the project's first unauthenticated write. **3.27**: an anonymous booking rewrote an existing customer's name and phone, keyed only on an unverified email — and because the owner's list joins the customer by id, one booking would have replaced that person's real details against every appointment they had ever had. **3.28**: nothing bounded a booking in either direction, so an anonymous caller could write appointments into 2019 or 2099, and booking out every slot of every year was a matter of patience rather than of getting past a control. **3.30**: the limiter keyed on `getRemoteAddr()`, which behind a load balancer is the proxy — so "60 per address" was one global bucket, and a single shell loop would have taken the booking page down for everyone. **3.29** tightens "bookable", which counted rows rather than anyone able to perform anything, leaving half-configured businesses publicly discoverable. **3.31** closes an occupancy oracle in the pair of 409 codes. **3.32** exists because two visitors sharing an email address produced a 500. |
 | 2026-09-06 | Revised after the verification suite found one defect and five ambiguities. 3.17 now defines "not bookable", because the implementation checked only that the slug existed and so answered 200 with a name and time zone for a business that had never opened — the same enumeration-oracle class as 1.5 and 1.12, and the natural thing to write. 3.20 follows from it: a business with nothing bookable is not a state the page can show, because it must not be distinguishable from an address that does not exist. 3.2 and 3.5 now name their codes: the losers of a race were split across `SLOT_TAKEN` and `SLOT_NOT_AVAILABLE` depending on whether the constraint or the re-derivation caught it, and a page recognising only one would have shown a silent failure — the booking service now distinguishes *never offered* from *offered and taken* rather than reporting whichever check fired first. **All four were defects in this document, not in the tests.** |

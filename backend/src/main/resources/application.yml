@@ -32,6 +32,12 @@ spring:
     default-property-inclusion: non_null
 
 server:
+  # Only enable behind a proxy that sets X-Forwarded-For itself. Without it, getRemoteAddr()
+  # returns the load balancer's address, so every visitor on the internet shares one rate-limit
+  # bucket and a single shell loop takes the booking page down for everyone. Enabled with it and
+  # no trusted proxy in front, a caller can spoof the header and get an unlimited allowance -
+  # which is why it is off by default and set explicitly in the deployment.
+  forward-headers-strategy: ${FORWARD_HEADERS_STRATEGY:none}
   # Railway and most platforms assign the port at runtime. Binding to a fixed 8080 makes the
   # container look unhealthy and get restarted, which reads as a slow deploy rather than a
   # misconfiguration - turn-3 spec, pitfall 9.
@@ -50,6 +56,12 @@ bookly:
   # Every row here makes an availability computation more expensive, so unbounded writes are
   # a way to make every later read slower for everyone. Generous for a real business,
   # nowhere near enough to be a denial-of-service primitive.
+  booking:
+    # How far ahead a booking may be made. Unbounded in either direction, an anonymous caller
+    # could write appointments into the past or into 2099, and booking out every slot of every
+    # year became a matter of patience rather than a matter of getting past a control.
+    horizon-days: 120
+
   limits:
     services-per-business: 200
     employees-per-business: 200
