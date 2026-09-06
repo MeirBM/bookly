@@ -122,3 +122,16 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/* The toast's entrance: short, small, and gone. The global reduced-motion rule already
+   collapses it to nothing for anyone who has asked for that. */
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}

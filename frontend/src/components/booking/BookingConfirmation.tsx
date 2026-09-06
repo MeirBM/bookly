@@ -1,3 +1,4 @@
+import { AddToCalendar } from "@/components/booking/AddToCalendar";
 import type { BookingConfirmation as Confirmation } from "@/lib/api";
 
 /**
@@ -46,6 +47,19 @@ export function BookingConfirmation({ confirmation }: { confirmation: Confirmati
           </dd>
         </div>
       </dl>
+
+      <div className="border-t border-border px-6 py-5">
+        <AddToCalendar
+          uid={confirmation.id}
+          event={{
+            title: `${confirmation.serviceName} at ${confirmation.businessName}`,
+            description: `With ${confirmation.employeeName}. Booked through Bookly.`,
+            location: confirmation.businessName,
+            startsAt: confirmation.startsAt,
+            endsAt: confirmation.endsAt,
+          }}
+        />
+      </div>
     </div>
   );
 }
