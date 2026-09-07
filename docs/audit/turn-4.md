@@ -169,6 +169,26 @@ trade reads as an oversight.
 
 ---
 
+## 4a. Verified in production
+
+Turn 4 merged green and was **not** deployed: Vercel rebuilt on the merge, Railway did not, so the
+frontend called a logo endpoint the API had never heard of. A user hit `No such endpoint.` — the
+first person to exercise the feature, which is the wrong person to find it. Recorded as failure
+mode 6 in [`docs/deploy.md`](../deploy.md).
+
+After the backend was redeployed, an owner set a logo on the live site and it rendered. That single
+observation carries more than itself: the endpoint exists, `V6`, `V7` and `V8` applied to the
+production database, and the `https` validation accepted a real address rather than only the
+fixtures in `BusinessLogoIT`.
+
+**What it does not carry**, stated so the row is not read as more than it is: the calendar hand-off
+and the booking alerts were not exercised in production. Both are lower risk — the hand-off is
+client-side and shipped with the Vercel build that was already live, and the alerts poll a turn-3
+endpoint that never changed — but neither has been watched working against the deployed system, and
+that is the difference between tested and verified.
+
+---
+
 ## 5. Merge-readiness
 
 | Criterion | Answer |
