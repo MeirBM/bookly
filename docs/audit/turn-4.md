@@ -176,7 +176,7 @@ trade reads as an oversight.
 | **Specification satisfied** | 15 of 15, each with a named test above, except 4.10 which the spec itself assigns to review. |
 | **Tests written independently** | Yes, by agents with the implementation withheld — with the registration deviation recorded in §2. |
 | **Reviewed** | Yes. Eight findings; six fixed, one declined with reason, one a spec defect corrected in the spec. |
-| **CI green** | Pending — recorded on the PR, not claimed here. |
+| **CI green** | Yes — [run 34106290731](https://github.com/MeirBM/bookly/actions/runs/34106290731) on PR #4: backend, browser, frontend and the full-history secret scan all pass. The first run was red; see the note below rather than only this row. |
 | **Risks stated** | Yes, §4. Five, none silent. |
 
 **A turn-3 test raced in CI and was made to wait, not made to pass.**
