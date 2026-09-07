@@ -53,7 +53,7 @@ browser closed is worse than no alert.
 |---|---|---|
 | 4.11 | An owner can set and clear a logo by URL, and it appears on the public booking page and in the dashboard | `BusinessLogoIT`, `booking.spec.ts` |
 | 4.12 | A business with no logo shows the Bookly mark rather than a gap | `booking.spec.ts.aBusinessWithoutALogoShowsTheBooklyMark` |
-| 4.13 | Only `https` URLs with a host and no embedded credentials are accepted; `http`, `javascript:` and `data:` are refused with 400 | `BusinessLogoIT.refusesAUrlThatIsNotHttp` |
+| 4.13 | Only `https` URLs with a host and no embedded credentials are accepted; `http`, `javascript:` and `data:` are refused with 400 | `BusinessLogoIT.refusesAUrlThatIsNotHttpsWithAHostAndNoCredentials` |
 | 4.14 | A logo that fails to load falls back to the Bookly mark rather than a broken image | `booking.spec.ts.aBrokenLogoFallsBackRatherThanBreaking` |
 | 4.15 | Setting a logo is tenant-scoped like every other write | `TenantIsolationIT`, generated from the route table |
 
@@ -127,4 +127,6 @@ evidence, and the branch merges to `main` with CI green.
 | Date | Change |
 |---|---|
 | 2026-09-07 | First version, written before any implementation commit. |
+| 2026-09-07 | **Decider renamed.** 4.13's test was `refusesAUrlThatIsNotHttp`, a name that became the opposite of what it asserts once `http` was refused. Reported by the test-writer, who correctly did not edit the spec to match its own rename. Now `refusesAUrlThatIsNotHttpsWithAHostAndNoCredentials`. |
+| 2026-09-07 | **Not required by 4.13: refusing a host on a private network.** `https://192.168.1.5/logo.png` is accepted. The test-writer raised it as an ambiguity and it is settled here rather than left to a test to guess. Refusing it properly means resolving DNS at save time and again at fetch time, since a public name can point anywhere and can be re-pointed after it is saved — so the check would be theatre, not a control. The residual risk is recorded in `docs/audit/turn-4.md`. |
 | 2026-09-07 | **Spec defect, found by the security review.** 4.13 said `http(s)`, which the implementation honoured. Accepting `http` is a promise Bookly cannot keep: it is served over TLS, so browsers block or fail to upgrade a cleartext image and the owner silently gets the Bookly mark instead of their logo — and where it does load, anyone on the visitor's path chooses what the shop's public page shows. Narrowed to `https`, and to URLs carrying no userinfo, since a logo is republished to anonymous callers by the public endpoint and `https://user:pass@host/x.png` would publish that credential to anyone who asks. This is the spec's own fork rule applied: the convenience of accepting `http` cost correctness and honesty, so the convenience goes. |

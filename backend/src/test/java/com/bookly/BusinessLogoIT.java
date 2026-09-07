@@ -20,7 +20,7 @@ import org.springframework.http.ResponseEntity;
  * <pre>
  *   PUT /api/businesses/{businessId}/logo   {"logoUrl": "&lt;string or null&gt;"}
  *   200 -&gt; the business, whose body carries a logoUrl field
- *   400 -&gt; not an absolute http(s) URL
+ *   400 -&gt; not an absolute https URL with a host and no embedded credentials
  * </pre>
  *
  * <p>Every set is asserted by reading the resource back rather than by trusting the response to the
@@ -28,13 +28,13 @@ import org.springframework.http.ResponseEntity;
  * anonymous {@code GET /api/public/businesses/{slug}}. A write that answers 200 and stores nothing
  * passes the first check and fails the second, and the second is the one a customer experiences.
  *
- * <p>Written from {@code docs/spec/turn-4.md} and the V6 migration only; the author of this suite
- * has not read {@code backend/src/main}.
+ * <p>Written from {@code docs/spec/turn-4.md} and the V6/V7 migrations only; the author of this
+ * suite has not read {@code backend/src/main}.
  */
 class BusinessLogoIT extends ApiIntegrationTest {
 
     private static final String A_LOGO = "https://cdn.example.test/logos/first.png";
-    private static final String ANOTHER_LOGO = "http://images.example.test/second.jpg";
+    private static final String ANOTHER_LOGO = "https://images.example.test/second.jpg";
 
     private record Fixture(Account owner, String businessId, String slug) {}
 
@@ -127,7 +127,7 @@ class BusinessLogoIT extends ApiIntegrationTest {
         ResponseEntity<String> replaced = setLogo(f, ANOTHER_LOGO);
 
         assertThat(replaced.getStatusCode().value())
-                .as("PUT /logo over an existing logo — http is a scheme the criterion allows too")
+                .as("PUT /logo over an existing logo, with a second absolute https URL")
                 .isEqualTo(200);
         assertThat(json(replaced).path("logoUrl").asText()).isEqualTo(ANOTHER_LOGO);
         assertThat(asOwner(f).path("logoUrl").asText())
@@ -201,17 +201,24 @@ class BusinessLogoIT extends ApiIntegrationTest {
     // -------------------------------------------------------------------- 4.13
 
     /**
-     * 4.13 — only {@code http(s)} URLs are accepted; a {@code javascript:} or {@code data:} URL is
-     * refused with 400.
+     * 4.13 — only {@code https} URLs with a host and no embedded credentials are accepted;
+     * {@code http}, {@code javascript:} and {@code data:} are refused with 400.
      *
      * <p>Pitfall 5 is the reason this criterion exists: the logo is owner-supplied text rendered on
      * a page anonymous customers visit. The refusal is asserted on the status code, and then on the
      * stored state — a 400 that nevertheless wrote the value would satisfy a status assertion and
      * still put {@code javascript:} into the public page.
+     *
+     * <p>The revision of 2026-09-07 narrowed the criterion from {@code http(s)} to {@code https},
+     * and added the two shapes that are refused for reasons a scheme check does not see: cleartext
+     * {@code http}, which a TLS page blocks or fails to upgrade so the owner silently gets the
+     * fallback mark, and userinfo, which the public endpoint would republish to every anonymous
+     * caller that asks. Every case that was already refused is still refused; none of them stopped
+     * being true.
      */
     @Test
-    @DisplayName("4.13 refuses a URL that is not http(s) with 400")
-    void refusesAUrlThatIsNotHttp() {
+    @DisplayName("4.13 refuses a URL that is not https with a host and no embedded credentials, with 400")
+    void refusesAUrlThatIsNotHttpsWithAHostAndNoCredentials() {
         record Rejected(String what, String url) {}
         List<Rejected> rejected = List.of(
                 new Rejected("a javascript: URL, which executes when the browser resolves it",
@@ -221,6 +228,22 @@ class BusinessLogoIT extends ApiIntegrationTest {
                         "JaVaScRiPt:alert(document.domain)"),
                 new Rejected("a data: URL, which can carry an SVG carrying a script",
                         "data:image/svg+xml;base64,PHN2Zy8+"),
+                new Rejected("a cleartext http: URL — Bookly is served over TLS, so the browser "
+                                + "blocks or fails to upgrade it and the owner silently gets the "
+                                + "fallback mark instead of their logo",
+                        "http://images.example.test/second.jpg"),
+                new Rejected("a cleartext http: URL wearing mixed case, since a case-sensitive "
+                                + "scheme check is no check at all",
+                        "HtTp://images.example.test/second.jpg"),
+                new Rejected("an https URL carrying userinfo — the public endpoint republishes the "
+                                + "logo to anonymous callers, so this would hand the credential to "
+                                + "anyone who asks for the booking page",
+                        "https://user:secret@files.example.test/logo.png"),
+                new Rejected("an https URL carrying a bare username, which is userinfo too",
+                        "https://user@files.example.test/logo.png"),
+                new Rejected("an https URL with no host at all", "https://"),
+                new Rejected("an https URL whose authority is empty, leaving only a path",
+                        "https:///logo.png"),
                 new Rejected("a data: URL declared as a plain image", "data:image/png;base64,iVBORw0KGgo="),
                 new Rejected("a relative path, which is not an absolute URL at all", "/logo.png"),
                 new Rejected("a deeper relative path", "../../etc/passwd"),
@@ -228,8 +251,8 @@ class BusinessLogoIT extends ApiIntegrationTest {
                 new Rejected("a protocol-relative URL, whose scheme is decided by the page not the owner",
                         "//example.test/logo.png"),
                 new Rejected("a file: URL", "file:///etc/passwd"),
-                new Rejected("an ftp: URL — the criterion is an allowlist of http and https, not a "
-                                + "blocklist of the two schemes that were named",
+                new Rejected("an ftp: URL — the criterion is an allowlist of https alone, not a "
+                                + "blocklist of the schemes that happened to be named",
                         "ftp://example.test/logo.png"));
 
         Fixture f = aBusiness("refuse");
@@ -242,7 +265,9 @@ class BusinessLogoIT extends ApiIntegrationTest {
             ResponseEntity<String> response = setLogo(f, r.url());
 
             soft.assertThat(response.getStatusCode().value())
-                    .as("%s (%s) is not an absolute http(s) URL and must be refused with 400",
+                    .as(
+                            "%s (%s) is not an absolute https URL with a host and no embedded "
+                                    + "credentials, and must be refused with 400",
                             r.what(), r.url())
                     .isEqualTo(400);
             soft.assertThat(asOwner(f).path("logoUrl").asText())
