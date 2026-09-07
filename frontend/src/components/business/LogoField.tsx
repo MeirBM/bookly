@@ -48,8 +48,9 @@ export function LogoField({ business }: { business: Business }) {
       <div>
         <h2 className="text-base font-semibold text-ink">Logo</h2>
         <p className="mt-1 text-sm text-ink-muted">
-          Shown on your public booking page. Paste a link to an image you already host — leave it
-          empty to use the Bookly mark.
+          Shown on your public booking page. Paste an <code className="font-mono text-xs">https</code>{" "}
+          link to an image you already host — leave it empty to use the Bookly mark. The address is
+          public, so avoid one with a password or a signed key in it.
         </p>
       </div>
 

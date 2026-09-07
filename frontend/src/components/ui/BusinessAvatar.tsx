@@ -55,6 +55,15 @@ export function BusinessAvatar({
     <img
       src={src}
       alt={`${name} logo`}
+      // The address is chosen by the business, so a visitor's browser fetches a host Bookly does
+      // not control. no-referrer keeps that host from learning which booking page the visitor was
+      // on. It cannot stop the request itself — an <img> is a request — so what remains is a
+      // deliberate trade recorded in docs/audit/turn-4.md, not an oversight.
+      //
+      // Not crossOrigin="anonymous", which the review also suggested: that switches the fetch to
+      // CORS mode, and an image host without Access-Control-Allow-Origin — which is most of them —
+      // would then fail to load. It would harden nothing here and break the ordinary case.
+      referrerPolicy="no-referrer"
       onError={() => setFailedSrc(src)}
       className={`shrink-0 border border-border bg-surface object-cover ${shape}`}
     />

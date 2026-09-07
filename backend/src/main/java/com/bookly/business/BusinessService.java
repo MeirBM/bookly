@@ -92,27 +92,40 @@ public class BusinessService {
     }
 
     /**
-     * Accepts only absolute {@code http} and {@code https} URLs.
+     * Accepts only absolute {@code https} URLs, with a host and without embedded credentials.
      *
      * <p>This is an allow-list, not a block-list of {@code javascript:} and {@code data:}. A
      * block-list of dangerous schemes is a list someone has to keep complete, and this string ends
-     * up in an {@code <img src>} on a page anyone can open. Two schemes are useful here; everything
+     * up in an {@code <img src>} on a page anyone can open. One scheme is useful here; everything
      * else is refused without needing to be enumerated.
+     *
+     * <p>{@code http} was accepted until a review pointed out that accepting it is a promise Bookly
+     * cannot keep: the app is served over TLS, so browsers block or fail to upgrade a cleartext
+     * image, and the owner sees the fallback mark with no explanation of why their logo never
+     * appeared. Where it did load, anyone on the visitor's path would choose what the shop's public
+     * page displays. A rejection at the point of pasting is the honest answer.
+     *
+     * <p>Userinfo is refused because this value is republished to anonymous callers by the public
+     * booking endpoint. An owner pasting {@code https://svc:s3cr3t@files.example/logo.png} would
+     * publish that credential to anyone who asks — while browsers strip it from subresource
+     * requests, so it would not even have been used.
      */
     private String validateLogoUrl(String candidate) {
         try {
             URI uri = new URI(candidate);
-            String scheme = uri.getScheme();
-            if (scheme == null || uri.getHost() == null
-                    || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))) {
-                throw ApiException.badRequest("INVALID_LOGO_URL",
-                        "A logo must be a full web address starting with http:// or https://.");
+            if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null
+                    || uri.getUserInfo() != null) {
+                throw invalidLogoUrl();
             }
             return candidate;
         } catch (URISyntaxException ex) {
-            throw ApiException.badRequest("INVALID_LOGO_URL",
-                    "A logo must be a full web address starting with http:// or https://.");
+            throw invalidLogoUrl();
         }
+    }
+
+    private ApiException invalidLogoUrl() {
+        return ApiException.badRequest("INVALID_LOGO_URL",
+                "A logo must be a full https:// web address, with no username or password in it.");
     }
 
     private void validateTimezone(String timezone) {

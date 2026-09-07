@@ -12,10 +12,29 @@ const POLL_MS = 20_000;
  *  to stay one small response. The backend refuses ranges beyond 62 days. */
 const WINDOW_DAYS = 45;
 
-function isoDate(offsetDays: number) {
+/**
+ * A calendar date in the business's own zone, offset by whole days.
+ *
+ * <p>This read `new Date().toISOString().slice(0, 10)` until a review caught it, which is the
+ * server-agnostic-looking mistake CLAUDE.md's Time section forbids: it is neither the viewer's zone
+ * nor the business's, but UTC. An owner in Los Angeles opening the dashboard at 20:00 was already
+ * on tomorrow's UTC date, so a customer booking for 21:30 that evening fell outside the window,
+ * never appeared in the response, and raised no toast — every evening, which is precisely the miss
+ * criterion 4.6 exists to prevent.
+ *
+ * <p>`en-CA` is not decoration: it is the locale that formats a date as `YYYY-MM-DD`, which is what
+ * the endpoint takes. Falling back to UTC while the zone is still loading is safe because the
+ * window also starts a day early.
+ */
+function isoDateIn(zone: string | undefined, offsetDays: number) {
   const date = new Date();
   date.setDate(date.getDate() + offsetDays);
-  return date.toISOString().slice(0, 10);
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: zone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
 }
 
 /**
@@ -38,8 +57,11 @@ export function useBookingAlerts(businessId: string) {
   const business = useBusiness(businessId);
   const { show } = useToast();
 
-  const from = isoDate(0);
-  const to = isoDate(WINDOW_DAYS);
+  // Starting yesterday rather than today costs one day of a bounded query and removes the whole
+  // class of off-by-one-day failure: whatever the zone does at a boundary, tonight is inside it.
+  const zone = business.data?.timezone;
+  const from = isoDateIn(zone, -1);
+  const to = isoDateIn(zone, WINDOW_DAYS);
 
   const { data } = useQuery({
     queryKey: ["booking-alerts", businessId, from, to],
@@ -53,8 +75,6 @@ export function useBookingAlerts(businessId: string) {
   // it is news. Only what appears after that baseline raises anything.
   const seen = useRef<Set<string> | null>(null);
   const seenFor = useRef(businessId);
-
-  const zone = business.data?.timezone;
 
   useEffect(() => {
     if (seenFor.current !== businessId) {

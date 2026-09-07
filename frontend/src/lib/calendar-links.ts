@@ -25,14 +25,54 @@ function asUtcStamp(iso: string): string {
   return new Date(iso).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
 }
 
-/** RFC 5545 asks for CRLF, and clients that dislike a file reject it without saying so. */
+/**
+ * One property, escaped and folded per RFC 5545.
+ *
+ * <p>The semicolon escape here was `"\;"` until a review caught it: in a JavaScript string that is
+ * a non-escape sequence and evaluates to a bare `";"`, so the line replaced every semicolon with
+ * itself. A service called "Cut & Colour; Deluxe" then wrote an unescaped separator into a TEXT
+ * value, and a strict parser truncates or rejects the line — silently, which is pitfall 1.
+ */
 function icsLine(name: string, value: string): string {
   const escaped = value
     .replace(/\\/g, "\\\\")
-    .replace(/;/g, "\;")
+    .replace(/;/g, "\\;")
     .replace(/,/g, "\\,")
     .replace(/\r?\n/g, "\\n");
-  return `${name}:${escaped}`;
+  return fold(`${name}:${escaped}`);
+}
+
+/**
+ * Folds a content line to 75 octets, continuing with a leading space.
+ *
+ * <p>Also pitfall 1, and also silent: a business and service name together pass 75 characters
+ * easily, and a client that rejects the over-long line gives the reader a button that does nothing.
+ * Counted in octets rather than characters because the limit is bytes and a name is not always
+ * ASCII — and split on whole code points, since a fold through the middle of a character produces
+ * a file that is worse than an over-long one.
+ */
+function fold(line: string): string {
+  const encoder = new TextEncoder();
+  if (encoder.encode(line).length <= 75) {
+    return line;
+  }
+  const parts: string[] = [];
+  let current = "";
+  let bytes = 0;
+  // The continuation's leading space costs one of the 75, so a folded line carries at most 74.
+  for (const character of line) {
+    const width = encoder.encode(character).length;
+    const budget = parts.length === 0 ? 75 : 74;
+    if (bytes + width > budget) {
+      parts.push(current);
+      current = "";
+      bytes = 0;
+    }
+    current += character;
+    bytes += width;
+  }
+  parts.push(current);
+  return parts.join("\r\n ");
 }
 
 export function toIcsFile(event: CalendarEvent, uid: string): string {
