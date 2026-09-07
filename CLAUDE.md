@@ -73,6 +73,12 @@ rule that was never written down.
 - Business-local reasoning uses `ZonedDateTime` with the business's IANA zone from
   `businesses.timezone`. Never `LocalDateTime.now()`, never the server's default zone.
 - Adding a duration across a DST boundary is done in the zone, not by adding seconds to an instant.
+- **A calendar date is never derived with `toISOString()`.** That converts to UTC, which is neither
+  the viewer's zone nor the business's — so it is right on a UTC machine and wrong for everyone
+  east of it. Use `lib/calendar-dates.ts`: `todayIn(zone)`, `dateOfInstantIn`, `addDays`,
+  `startOfWeek`, `formatPlainDate`. This shipped once, as a calendar that labelled a column with
+  one date and filled it with another, and the whole browser suite runs at `timezoneId: "UTC"`,
+  where the bug cannot exist. A test pinned to UTC does not test a date derivation.
 - `AvailabilityCalculator` is a pure function: inputs in, slots out, no repository, no clock lookup
   — the clock is passed in. This is what makes the hard logic testable without a database.
 

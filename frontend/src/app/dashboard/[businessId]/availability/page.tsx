@@ -9,6 +9,8 @@ import { Input, Select } from "@/components/ui/Input";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { todayIn } from "@/lib/calendar-dates";
+import { useBusiness } from "@/lib/use-business";
 
 /**
  * What the engine would offer a customer right now.
@@ -28,7 +30,12 @@ export default function AvailabilityPage({
 
   const [serviceId, setServiceId] = useState("");
   const [employeeId, setEmployeeId] = useState("");
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState("");
+
+  const business = useBusiness(businessId);
+  // Today on the shop's clock. An owner checking "today" in a shop three zones away must be shown
+  // the shop's today, and a UTC-derived date is neither theirs nor the shop's.
+  const activeDate = date || (business.data ? todayIn(business.data.timezone) : "");
 
   const services = useQuery({
     queryKey: ["services", businessId],
@@ -44,14 +51,14 @@ export default function AvailabilityPage({
   const chosenService = serviceId || services.data?.[0]?.id || "";
 
   const availability = useQuery({
-    queryKey: ["availability", businessId, chosenService, employeeId, date],
+    queryKey: ["availability", businessId, chosenService, employeeId, activeDate],
     queryFn: () =>
       api.availability(token, businessId, {
         serviceId: chosenService,
         employeeId: employeeId || undefined,
-        date,
+        date: activeDate,
       }),
-    enabled: Boolean(token && chosenService && date),
+    enabled: Boolean(token && chosenService && activeDate),
   });
 
   const employeeName = (id: string) =>
@@ -108,7 +115,7 @@ export default function AvailabilityPage({
             </label>
             <label className="text-sm">
               <span className="mb-1.5 block font-medium text-ink">Date</span>
-              <Input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+              <Input type="date" value={activeDate} onChange={(event) => setDate(event.target.value)} />
             </label>
           </Card>
 
