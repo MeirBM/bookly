@@ -181,6 +181,38 @@ deployments, the database, and the browser in one pass.
 
 ---
 
+## Failure mode 6 — the two deployments drift apart, and the frontend is the one that moves
+
+**Symptom.** A feature merged with CI green, and green on the merge commit, fails in production with
+`No such endpoint.` — Bookly's own 404 for a route that does not exist. Everything else works.
+
+**Cause.** Vercel and Railway are separate GitHub integrations and they do not agree about when a
+merge means "deploy". Vercel rebuilt on the turn-4 merge; Railway did not. The frontend was calling
+an endpoint the API had never heard of.
+
+**Why it is worth its own entry.** The split is quiet by construction. A frontend ahead of its API
+degrades gracefully almost everywhere — a response field the old API omits arrives as `undefined`,
+and a well-built component falls back rather than breaking — so only the one *write* that needs the
+new route fails. Nothing else looks wrong, which is why this reaches a user rather than a test.
+
+**The correction to the habit, not just the incident.** `git merge` is not a deploy, and CI green on
+a merge commit says nothing about what is running. A turn is not deployed until something that only
+exists in that turn has been observed answering in production. For turn 4 that check is one line,
+and it needs no account:
+
+```bash
+# logoUrl is a turn-4 field. Absent means the backend predates the turn.
+curl -fsS https://<backend>/api/public/businesses/<a-real-slug> | grep -q logoUrl \
+  && echo "backend has turn 4" || echo "backend is behind"
+```
+
+**Fix.** In the Railway project, open the backend service → **Deployments**. If the latest deployment
+predates the merge, either press **Deploy** on the current `main`, or check Settings → Source that
+the watched branch is `main` and automatic deploys are enabled. Then read the deploy log and confirm
+Flyway applied the turn's migrations — for turn 4, `V6`, `V7` and `V8`.
+
+---
+
 ## What is not deployed
 
 No CI deploy step. Deployment is triggered from the platforms' own GitHub integration, and adding a
