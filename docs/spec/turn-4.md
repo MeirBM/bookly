@@ -53,7 +53,7 @@ browser closed is worse than no alert.
 |---|---|---|
 | 4.11 | An owner can set and clear a logo by URL, and it appears on the public booking page and in the dashboard | `BusinessLogoIT`, `booking.spec.ts` |
 | 4.12 | A business with no logo shows the Bookly mark rather than a gap | `booking.spec.ts.aBusinessWithoutALogoShowsTheBooklyMark` |
-| 4.13 | Only `http(s)` URLs are accepted; a `javascript:` or `data:` URL is refused with 400 | `BusinessLogoIT.refusesAUrlThatIsNotHttp` |
+| 4.13 | Only `https` URLs with a host and no embedded credentials are accepted; `http`, `javascript:` and `data:` are refused with 400 | `BusinessLogoIT.refusesAUrlThatIsNotHttp` |
 | 4.14 | A logo that fails to load falls back to the Bookly mark rather than a broken image | `booking.spec.ts.aBrokenLogoFallsBackRatherThanBreaking` |
 | 4.15 | Setting a logo is tenant-scoped like every other write | `TenantIsolationIT`, generated from the route table |
 
@@ -105,7 +105,10 @@ depends on someone else's hosting, which is why 4.14 requires a fallback rather 
    into a wall — a notification that cannot be got rid of is a worse experience than no
    notification.
 5. **`javascript:` and `data:` URLs in an `<img src>`** are the obvious injection here, and the
-   logo is owner-supplied text rendered on a public page.
+   logo is owner-supplied text rendered on a public page. `http` is the non-obvious one: it passes
+   every validator that thinks in schemes, and then fails in the browser, because a cleartext image
+   on a TLS page is blocked or upgraded and the owner is left looking at the fallback with no
+   explanation.
 6. **Do not imply what polling cannot do.** The owner must not believe Bookly will tell them about
    a booking while their browser is closed. It will not, and finding that out through a missed
    appointment is the worst possible way to learn it.
@@ -124,3 +127,4 @@ evidence, and the branch merges to `main` with CI green.
 | Date | Change |
 |---|---|
 | 2026-09-07 | First version, written before any implementation commit. |
+| 2026-09-07 | **Spec defect, found by the security review.** 4.13 said `http(s)`, which the implementation honoured. Accepting `http` is a promise Bookly cannot keep: it is served over TLS, so browsers block or fail to upgrade a cleartext image and the owner silently gets the Bookly mark instead of their logo — and where it does load, anyone on the visitor's path chooses what the shop's public page shows. Narrowed to `https`, and to URLs carrying no userinfo, since a logo is republished to anonymous callers by the public endpoint and `https://user:pass@host/x.png` would publish that credential to anyone who asks. This is the spec's own fork rule applied: the convenience of accepting `http` cost correctness and honesty, so the convenience goes. |
