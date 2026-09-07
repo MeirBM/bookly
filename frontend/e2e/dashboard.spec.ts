@@ -1133,3 +1133,83 @@ test.describe("turn 4 — booking alerts", () => {
     ).toHaveCount(0);
   });
 });
+
+/**
+ * Regression: reported from production on 7 September 2026 — an appointment booked for today
+ * appeared on the calendar under tomorrow.
+ *
+ * <p>The whole dashboard suite pins the browser to UTC, and that is what let this ship. A calendar
+ * date derived with `toISOString()` is correct by construction at UTC and wrong for every viewer
+ * east of it, so the one setting that makes the suite deterministic also made this defect
+ * unreachable. `theCalendarPlacesAppointmentsCorrectly` compares against a Los Angeles label, which
+ * is behind UTC — the side where local midnight still falls on the same UTC day.
+ *
+ * <p>The stage is deliberately the easy case rather than a clever one: the business and the viewer
+ * are in the *same* zone, and the appointment is at an ordinary hour of the morning. Nobody has to
+ * reason about which clock wins, because there is only one clock. If the calendar cannot put
+ * 09:00 on Thursday under Thursday for a viewer sitting in the shop, nothing subtler matters.
+ */
+test.describe("regression — the calendar day a viewer east of UTC sees", () => {
+  test.use({ timezoneId: "Asia/Jerusalem" });
+
+  test("anAppointmentAppearsUnderItsOwnDayForAViewerAheadOfUtc", async ({ page, request }) => {
+    const zone = "Asia/Jerusalem";
+    const owner = await newBookingOwner(request);
+    const seeded = await seedBookable(request, owner, {
+      durationMinutes: 30,
+      timezone: zone,
+      hours: [{ weekday: "THURSDAY", start: "09:00:00", end: "17:00:00" }],
+    });
+    const thursday = upcoming("THURSDAY");
+
+    const availability = await publicAvailability(request, seeded.slug, seeded.serviceId, thursday);
+    expect(availability.slots.length, "the seeded Thursday offers times").toBeGreaterThan(0);
+    const start = availability.slots[0].start;
+
+    // Both clocks agree, so there is exactly one right answer and no zone argument to have.
+    const businessDayLabel = dayLabelIn(start, zone);
+    expect(
+      dayLabelIn(start, "Asia/Jerusalem"),
+      "the fixture puts the viewer in the same zone as the shop, so the two must agree",
+    ).toBe(businessDayLabel);
+
+    const booked = await bookViaPublicApi(request, seeded.slug, {
+      serviceId: seeded.serviceId,
+      employeeId: seeded.employeeId,
+      startsAt: start,
+      name: "Same Zone Customer",
+    });
+    expect(booked.status(), "the booking").toBe(201);
+
+    await signInAsBookingOwner(page, owner);
+    await page.goto(`/dashboard/${seeded.businessId}/calendar`);
+    await expect(page.getByText(/times shown in/i)).toBeVisible({ timeout: SETTLE });
+
+    let reached = false;
+    for (let week = 0; week < 12 && !reached; week++) {
+      if ((await page.locator("body").innerText()).includes(businessDayLabel)) {
+        reached = true;
+        break;
+      }
+      await page.getByRole("button", { name: /next week/i }).click();
+      await page.waitForTimeout(400);
+    }
+    expect(reached, `the calendar must reach the week holding ${businessDayLabel}`).toBe(true);
+
+    const days = dayBuckets(await page.locator("body").innerText());
+    expect(
+      days[businessDayLabel],
+      `the appointment must appear under ${businessDayLabel}, the day it is on — a calendar that ` +
+        "labels a column with one date and fills it with another is telling the owner to expect a " +
+        "customer on the wrong day",
+    ).toContain("Same Zone Customer");
+
+    const elsewhere = Object.entries(days).filter(
+      ([label, body]) => label !== businessDayLabel && body.includes("Same Zone Customer"),
+    );
+    expect(
+      elsewhere.map(([label]) => label),
+      "and under no other day, since appearing twice is the same lie told twice",
+    ).toEqual([]);
+  });
+});
