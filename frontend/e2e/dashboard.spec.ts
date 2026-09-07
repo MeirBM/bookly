@@ -8,6 +8,7 @@ import {
   seedBookable,
   signIn as signInAsBookingOwner,
   upcoming,
+  type PublicSlot,
 } from "./support/fixtures";
 
 /**
@@ -629,8 +630,20 @@ test.describe("dashboard screens", () => {
       )
       .toBe("CANCELLED");
 
+    // Polled, not snapshotted. The assertion above proves the *API* has cancelled it; the screen
+    // catching up is a second round trip that the invalidated query still has to make, and reading
+    // innerText once the instant the API answers allows it no time at all. That raced on a loaded
+    // CI runner while passing locally in about a second, which is the signature of a test that
+    // measures the runner rather than the behaviour. The condition is unchanged and still has to
+    // become true within SETTLE — only the single read became a wait.
+    await expect
+      .poll(async () => page.locator("body").innerText(), {
+        message: "the screen must not still present it as a live booking",
+        timeout: SETTLE,
+      })
+      .not.toMatch(/confirmed|pending/i);
+
     const after = await page.locator("body").innerText();
-    expect(after, "the screen must not still present it as a live booking").not.toMatch(/confirmed|pending/i);
     expect(after, "and the page must visibly change, not silently succeed").not.toEqual(before);
   });
 
@@ -731,5 +744,392 @@ test.describe("dashboard screens", () => {
       Object.values(emptyWeek).join(""),
       "and it must say it is empty rather than leaving the reader to infer it",
     ).not.toContain("Midnight Customer");
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * Turn 4, criteria 4.5 to 4.9 — booking alerts on the owner's dashboard.
+ *
+ * Written from `docs/spec/turn-4.md`; frontend/src was not read.
+ *
+ * Every alert here is raised the way a real one is: a stranger books through the public API while
+ * the owner's browser sits on the dashboard, and the page finds out by polling. Nothing is
+ * injected and no response is stubbed, because the thing under test is precisely whether the page
+ * notices a change it was not told about.
+ * ------------------------------------------------------------------------- */
+
+/** How long to allow for a poll to happen and be noticed. The interval is about 20 seconds. */
+const POLL_WINDOW = 75_000;
+
+/**
+ * What counts as an alert.
+ *
+ * <p>A toast is a transient announcement, so it must be exposed as one: `role="status"` or
+ * `role="alert"` is how assistive technology is told that something appeared without the reader
+ * having moved. An owner who cannot see the screen is still running the business. The testid is
+ * accepted as an alternative so this does not hinge on which of the two the page chose, and every
+ * sample is filtered by the text of the booking under test, so a loading indicator that also
+ * carries `role="status"` cannot be mistaken for an alert.
+ */
+const ALERT_SELECTOR = '[role="alert"], [role="status"], [data-testid="toast"]';
+
+async function visibleAlertTexts(page: Page): Promise<string[]> {
+  return page
+    .evaluate((selector) => {
+      return [...document.querySelectorAll(selector)]
+        .filter((el) => {
+          const box = el.getBoundingClientRect();
+          const style = getComputedStyle(el);
+          return (
+            box.width > 0 &&
+            box.height > 0 &&
+            style.visibility !== "hidden" &&
+            style.display !== "none" &&
+            style.opacity !== "0"
+          );
+        })
+        .map((el) => (el.textContent ?? "").replace(/\s+/g, " ").trim())
+        .filter((text) => text.length > 0);
+    }, ALERT_SELECTOR)
+    .catch(() => [] as string[]);
+}
+
+type AlertWatch = {
+  /** The text of each *appearance*: one entry per time an alert about this booking came back. */
+  appearances: string[];
+  /** The largest number of matching alerts on screen at once. */
+  peak: number;
+  stop: () => Promise<void>;
+};
+
+/**
+ * Counts how many times an alert about one booking appears, over as long as it is watched.
+ *
+ * <p>Counting appearances rather than reading the screen at the end is what makes 4.7 testable at
+ * all: 4.8 requires a toast to expire, so by the time the second poll has happened the first toast
+ * is legitimately gone, and "is there a toast now" cannot tell "alerted once, correctly" from
+ * "alerted twice and the second one also expired". A transition from nothing-matching to
+ * something-matching is exactly one alert.
+ */
+function watchAlerts(page: Page, matches: (text: string) => boolean): AlertWatch {
+  const watch: AlertWatch = { appearances: [], peak: 0, stop: async () => {} };
+  let present = false;
+  let stopped = false;
+  // A page that closes ends the watch, so a failing test cannot leave this loop running.
+  page.on("close", () => {
+    stopped = true;
+  });
+  const loop = (async () => {
+    while (!stopped) {
+      const matching = (await visibleAlertTexts(page)).filter(matches);
+      watch.peak = Math.max(watch.peak, matching.length);
+      if (matching.length > 0 && !present) watch.appearances.push(matching.join(" | "));
+      present = matching.length > 0;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+  })();
+  watch.stop = async () => {
+    stopped = true;
+    await loop;
+  };
+  return watch;
+}
+
+/**
+ * Counts poll *cycles*, so a test can wait for polling to happen rather than sleep for a guess.
+ *
+ * <p>Counting requests would not do it: opening the dashboard fetches the business, its services,
+ * its people and its appointments in one go, so "four requests have happened" is true before the
+ * page has finished loading and says nothing about whether anything was ever re-read. What a cycle
+ * is, is the *same* resource fetched again — so this returns how many times the most-refetched
+ * path under this business has been read, which is one on arrival and two after the first poll.
+ * The query string is dropped so that a poll carrying a moving date range still counts as the same
+ * resource.
+ */
+function countPolls(page: Page, businessId: string): () => number {
+  const readsByPath = new Map<string, number>();
+  page.on("response", (response) => {
+    if (response.request().method() !== "GET" || response.status() !== 200) return;
+    if (!response.url().includes(`/api/businesses/${businessId}`)) return;
+    const path = new URL(response.url()).pathname;
+    readsByPath.set(path, (readsByPath.get(path) ?? 0) + 1);
+  });
+  return () => Math.max(0, ...readsByPath.values());
+}
+
+/**
+ * `count` of the day's offered times that do not overlap one another.
+ *
+ * <p>Consecutive slots are a step apart, not a service apart, so `slots[0]` and `slots[1]` are
+ * usually the same half hour offered twice. Booking both is a 409 from the overlap constraint —
+ * correct behaviour, and nothing at all to do with the alert under test.
+ */
+function spacedSlots(slots: PublicSlot[], count: number): PublicSlot[] {
+  const chosen: PublicSlot[] = [];
+  let freeFrom = 0;
+  for (const slot of slots) {
+    if (Date.parse(slot.start) >= freeFrom) {
+      chosen.push(slot);
+      freeFrom = Date.parse(slot.end);
+    }
+    if (chosen.length === count) break;
+  }
+  expect(chosen.length, `the seeded day must offer ${count} times that do not overlap`).toBe(count);
+  return chosen;
+}
+
+/** Books through the public API as a stranger would, and returns what they booked. */
+async function bookOutOfBand(
+  request: APIRequestContext,
+  seeded: { slug: string; serviceId: string; employeeId: string; timezone: string },
+  startsAt: string,
+  customerName: string,
+) {
+  const response = await bookViaPublicApi(request, seeded.slug, {
+    serviceId: seeded.serviceId,
+    employeeId: seeded.employeeId,
+    startsAt,
+    name: customerName,
+  });
+  expect(response.status(), `the out-of-band booking for ${customerName}`).toBe(201);
+  return response.json();
+}
+
+test.describe("turn 4 — booking alerts", () => {
+  // The business is in Auckland and the owner is watching from Los Angeles, so "the time" in a
+  // toast has exactly one correct answer and it is not the one the viewer's clock gives.
+  test.use({ timezoneId: "America/Los_Angeles" });
+
+  test.beforeAll(async ({ request }) => {
+    const health = await request.get(`${API}/actuator/health`).catch(() => null);
+    expect(health?.ok(), `these tests need the backend at ${API}`).toBe(true);
+  });
+
+  /**
+   * 4.5 — bookings already present when the dashboard opens raise no alert.
+   *
+   * <p>Pitfall 3: every booking looks new to an empty set. An owner opening the dashboard on a
+   * busy Thursday must not be met by a wall of toasts for appointments they made last week, and
+   * the toast that cried wolf is the one they will ignore when it is real.
+   */
+  test("existingBookingsDoNotAlert", async ({ page, request }) => {
+    test.setTimeout(180_000);
+    const owner = await newBookingOwner(request);
+    const seeded = await seedBookable(request, owner, { durationMinutes: 30 });
+    const date = upcoming("THURSDAY");
+
+    const availability = await publicAvailability(request, seeded.slug, seeded.serviceId, date);
+    expect(availability.slots.length, "the seeded day offers times").toBeGreaterThan(0);
+    const already = ["Prior Customer Ada", "Prior Customer Bea", "Prior Customer Cal"];
+    const priorSlots = spacedSlots(availability.slots, already.length);
+    for (let i = 0; i < already.length; i++) {
+      await bookOutOfBand(request, seeded, priorSlots[i].start, already[i]);
+    }
+
+    await signInAsBookingOwner(page, owner);
+    const polls = countPolls(page, seeded.businessId);
+    const watch = watchAlerts(page, (text) => already.some((name) => text.includes(name)));
+    await page.goto(`/dashboard/${seeded.businessId}`);
+    await settledText(page);
+
+    // Wait for real polls rather than a fixed sleep: the criterion is about what the second and
+    // third read of an unchanged list do, so the test has to know they happened.
+    await expect
+      .poll(polls, {
+        message: "the dashboard must actually be polling, or this test proves nothing about it",
+        timeout: POLL_WINDOW,
+      })
+      .toBeGreaterThanOrEqual(3);
+    await watch.stop();
+
+    expect(
+      watch.appearances,
+      "4.5 and pitfall 3: bookings that were already there when the dashboard opened must raise " +
+        "nothing. The first successful response seeds what is known; it is not a set of changes",
+    ).toEqual([]);
+  });
+
+  /**
+   * 4.6 and 4.7 — a booking made while the dashboard is open raises exactly one toast, naming the
+   * customer, the service and the time, and never alerts again however many polls follow.
+   */
+  test("aNewBookingRaisesOneToast", async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const owner = await newBookingOwner(request);
+    const seeded = await seedBookable(request, owner, { durationMinutes: 30 });
+    const date = upcoming("THURSDAY");
+
+    const availability = await publicAvailability(request, seeded.slug, seeded.serviceId, date);
+    expect(availability.slots.length, "the seeded day offers times").toBeGreaterThan(0);
+    const [existing, arriving] = spacedSlots(availability.slots, 2);
+    // One booking already on the books, so the new one has to be told apart from an existing one
+    // rather than merely from nothing.
+    await bookOutOfBand(request, seeded, existing.start, "Prior Customer Dee");
+
+    await signInAsBookingOwner(page, owner);
+    const polls = countPolls(page, seeded.businessId);
+    const customer = `Nadia Newcomer ${Date.now()}`;
+    const watch = watchAlerts(page, (text) => text.includes(customer));
+    await page.goto(`/dashboard/${seeded.businessId}`);
+    await settledText(page);
+
+    // The dashboard must have read the list at least once before the new booking exists, or
+    // "already present" and "arrived while open" are the same thing.
+    await expect
+      .poll(polls, { message: "the dashboard reads the business before anything changes", timeout: POLL_WINDOW })
+      .toBeGreaterThanOrEqual(1);
+
+    const startsAt = arriving.start;
+    await bookOutOfBand(request, seeded, startsAt, customer);
+    const expectedTime = localTimeIn(startsAt, seeded.timezone);
+
+    await expect
+      .poll(() => watch.appearances.length, {
+        message:
+          "4.6: a booking made while the dashboard is open must raise a toast. An owner who only " +
+          "learns of a booking by reloading is still doing the polling themselves",
+        timeout: POLL_WINDOW,
+      })
+      .toBeGreaterThanOrEqual(1);
+
+    const toast = watch.appearances[0];
+    expect(toast, "4.6: the toast names the customer").toContain(customer);
+    expect(toast, "and what they booked").toContain(seeded.serviceName);
+    expect(
+      timeIsShown(toast, expectedTime),
+      `4.6: and when it is — ${expectedTime} on the business's clock (${seeded.timezone}). ` +
+        "This browser is in America/Los_Angeles, and an alert that named the viewer's reading of " +
+        `the instant would say ${localTimeIn(startsAt, "America/Los_Angeles")} instead. ` +
+        `The toast said: ${toast}`,
+    ).toBe(true);
+    expect(
+      watch.peak,
+      "one booking is one alert: pitfall 4 forbids a wall of toasts, and two copies of the same " +
+        "booking is where that wall starts",
+    ).toBe(1);
+
+    // 4.7 — hold the page open across two further poll cycles and see whether it says it again.
+    const pollsAtAlert = polls();
+    await expect
+      .poll(polls, {
+        message: "two more polls must actually occur, or 'never alerts twice' has not been tested",
+        timeout: POLL_WINDOW * 2,
+      })
+      .toBeGreaterThanOrEqual(pollsAtAlert + 2);
+    await watch.stop();
+
+    expect(
+      watch.appearances,
+      "4.7: the same booking must never alert twice, however many polls occur. A page that " +
+        "compares each response against the one before it, rather than against what it has " +
+        "already told the owner about, re-announces the same appointment every twenty seconds " +
+        "until the owner closes the tab",
+    ).toHaveLength(1);
+  });
+
+  /**
+   * 4.8 — a toast can be dismissed, and disappears on its own.
+   *
+   * <p>Pitfall 4: a notification that cannot be got rid of is worse than no notification. Both
+   * halves are required — a toast that only expires cannot be cleared by an owner who wants it
+   * gone now, and one that only dismisses stays on screen forever if nobody is looking.
+   */
+  test("aToastCanBeDismissedAndAlsoDisappearsOnItsOwn", async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const owner = await newBookingOwner(request);
+    const seeded = await seedBookable(request, owner, { durationMinutes: 30 });
+    const date = upcoming("THURSDAY");
+
+    const availability = await publicAvailability(request, seeded.slug, seeded.serviceId, date);
+    const [forDismissal, forExpiry] = spacedSlots(availability.slots, 2);
+
+    await signInAsBookingOwner(page, owner);
+    const polls = countPolls(page, seeded.businessId);
+    await page.goto(`/dashboard/${seeded.businessId}`);
+    await settledText(page);
+    await expect
+      .poll(polls, { message: "the dashboard reads the business before anything changes", timeout: POLL_WINDOW })
+      .toBeGreaterThanOrEqual(1);
+
+    // --- dismissed by the owner.
+    const dismissed = `Dismissed Customer ${Date.now()}`;
+    await bookOutOfBand(request, seeded, forDismissal.start, dismissed);
+    const firstToast = page.locator(ALERT_SELECTOR).filter({ hasText: dismissed }).first();
+    await expect(firstToast, "the toast for the first new booking").toBeVisible({ timeout: POLL_WINDOW });
+
+    const close = firstToast.getByRole("button").first();
+    await expect(
+      close,
+      "4.8: a toast must offer a way to get rid of it. An interruption the reader cannot close is " +
+        "an interruption they will learn to work around, which costs the feature its point",
+    ).toBeVisible({ timeout: SETTLE });
+    await close.click();
+    await expect(
+      firstToast,
+      "and dismissing it must remove it promptly, not merely start its timer",
+    ).toBeHidden({ timeout: 5_000 });
+
+    // --- and expires by itself.
+    const ignored = `Ignored Customer ${Date.now()}`;
+    await bookOutOfBand(request, seeded, forExpiry.start, ignored);
+    const secondToast = page.locator(ALERT_SELECTOR).filter({ hasText: ignored }).first();
+    await expect(secondToast, "the toast for the second new booking").toBeVisible({ timeout: POLL_WINDOW });
+    await expect(
+      secondToast,
+      "4.8: a toast nobody touches must expire. The owner is working, not watching, and toasts " +
+        "that never leave stack into the wall pitfall 4 forbids",
+    ).toBeHidden({ timeout: 60_000 });
+
+    expect(
+      await visibleAlertTexts(page).then((texts) => texts.filter((t) => t.includes(ignored) || t.includes(dismissed))),
+      "and neither of them is left behind on screen",
+    ).toEqual([]);
+  });
+
+  /**
+   * 4.9 — the dashboard says that alerts arrive only while it is open, and does not imply more.
+   *
+   * <p>Pitfall 6 is the reason this is a criterion rather than a nicety. Polling is the whole
+   * mechanism, and it stops when the tab does; an owner who believes Bookly will tell them about a
+   * booking with the browser closed finds out otherwise through a customer standing in an empty
+   * shop. Section 1 is explicit: an alert that implies Bookly can reach someone with the browser
+   * closed is worse than no alert at all.
+   */
+  test("theDashboardSaysAlertsArriveOnlyWhileItIsOpen", async ({ page, request }) => {
+    test.setTimeout(120_000);
+    const owner = await newBookingOwner(request);
+    const seeded = await seedBookable(request, owner, { durationMinutes: 30 });
+
+    await signInAsBookingOwner(page, owner);
+    await page.goto(`/dashboard/${seeded.businessId}`);
+    const text = await settledText(page);
+
+    expect(
+      text,
+      "4.9: the dashboard must state that new-booking alerts arrive only while this page is open. " +
+        "Leaving it unsaid lets the owner assume the opposite, and the assumption is only " +
+        "corrected by a missed appointment",
+    ).toMatch(/(while|when)[^.]{0,60}\b(page|dashboard|tab|screen|window)\b[^.]{0,30}\bopen\b/i);
+
+    expect(
+      text,
+      "and it must not imply a channel that does not exist: there is no push notification here",
+    ).not.toMatch(/push notification/i);
+    expect(
+      text,
+      "nor an email or SMS alert — the spec adds no backend, so nothing is sent anywhere",
+    ).not.toMatch(/\b(e-?mail|sms|text message)s?\b[^.]{0,30}\b(alert|notif|remind)/i);
+    expect(
+      text,
+      "and it must not claim to reach the owner with the browser closed, which is the exact " +
+        "belief pitfall 6 exists to prevent",
+    ).not.toMatch(/even (when|if|while)[^.]{0,60}\b(closed|not open|away|offline|logged out)\b/i);
+
+    // "Unobtrusively": a notice about a convenience must not be a thing the owner has to dismiss
+    // before they can work.
+    await expect(
+      page.getByRole("dialog"),
+      "4.9 asks for this unobtrusively; a modal blocking the dashboard is the opposite",
+    ).toHaveCount(0);
   });
 });

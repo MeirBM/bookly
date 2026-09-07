@@ -367,6 +367,7 @@ class OpenApiIT extends ApiIntegrationTest {
                         bookable.serviceId(), bookable.employeeId(), freeStart(),
                         UUID.randomUUID() + "@example.test");
                 case "Reschedule" -> body("startsAt", freeStart().toString());
+                case "UpdateBusinessLogoRequest" -> body("logoUrl", "https://example.test/logo.png");
                 default -> throw new CannotExercise("no sample body known for schema " + schema);
             };
         }

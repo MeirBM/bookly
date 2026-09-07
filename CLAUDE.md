@@ -143,6 +143,10 @@ and **a page composes small components** rather than holding hundreds of lines o
   or changing an accessible name silently breaks the only automated proof that the booking flow
   works. Change them deliberately and update the tests in the same commit, never one without the
   other.
+- **A booking alert is found by its `role="status"`, not by a testid, and that is deliberate.** A
+  transient announcement a screen-reader user cannot perceive is not an alert, so the role is a
+  requirement in its own right and the suite selects on the thing that has to be true anyway. Do
+  not "fix" this by adding a testid and relaxing the role.
 - No secret, key or privileged decision in browser code. The browser is untrusted.
 
 ## Git

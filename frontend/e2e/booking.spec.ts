@@ -327,3 +327,313 @@ test.describe("public booking page", () => {
       .not.toContain(unbookable.slug);
   });
 });
+
+/**
+ * Turn-4 criteria 4.1, 4.12 and 4.14 — the calendar hand-off on a real confirmation, and the
+ * business's identity on the public page.
+ *
+ * <p>Written from `docs/spec/turn-4.md`; frontend/src was not read. The exports of
+ * `src/lib/calendar-links.ts` are exercised directly by `ics-file.spec.ts`; what is decided here is
+ * only what a customer's browser actually does with them.
+ */
+
+/** `2026-09-23T21:00:00.000Z` -> `20260923T210000Z`, the form an .ics and a Google link both use. */
+function utcStamp(instant: string): string {
+  return new Date(instant).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+}
+
+/** The text of an `.ics` carried in a data: URL, however it was encoded. */
+function decodeDataUrl(dataUrl: string): string {
+  const comma = dataUrl.indexOf(",");
+  const meta = dataUrl.slice(0, comma);
+  const payload = dataUrl.slice(comma + 1);
+  return meta.includes(";base64")
+    ? Buffer.from(payload, "base64").toString("utf8")
+    : decodeURIComponent(payload);
+}
+
+/** A 1x1 PNG, so an intercepted logo request answers with an image that genuinely decodes. */
+const ONE_PIXEL_PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+/** PUT /api/businesses/{businessId}/logo as the owner. */
+async function setLogo(
+  request: import("@playwright/test").APIRequestContext,
+  owner: { auth: Record<string, string> },
+  businessId: string,
+  logoUrl: string | null,
+) {
+  const response = await request.put(`${API}/api/businesses/${businessId}/logo`, {
+    data: { logoUrl },
+    headers: owner.auth,
+  });
+  expect(response.status(), `setting the logo to ${logoUrl}`).toBe(200);
+  return response.json();
+}
+
+/**
+ * The Bookly mark, as an accessible image.
+ *
+ * <p>4.12 and 4.14 both ask for a *mark* rather than a gap, and a mark a screen reader cannot name
+ * is a gap to the people most likely to be harmed by one. `role=img` with a name mentioning Bookly
+ * is how both an `<img alt>` and an inline `<svg role="img" aria-label>` expose that; the testid is
+ * accepted as an alternative so the criterion is not decided by which of the two the page chose.
+ */
+function booklyMark(page: Page) {
+  return page
+    .getByRole("img", { name: /bookly/i })
+    .or(page.locator('[data-testid="bookly-mark"]'))
+    .first();
+}
+
+/** Every `<img>` the browser tried and failed to load: loaded, but with nothing in it. */
+async function brokenImages(page: Page): Promise<string[]> {
+  return page.evaluate(() =>
+    [...document.querySelectorAll("img")]
+      .filter((img) => img.complete && img.naturalWidth === 0)
+      .map((img) => img.currentSrc || img.getAttribute("src") || "(no src)"),
+  );
+}
+
+test.describe("turn 4 — calendar hand-off and business identity", () => {
+  test.beforeAll(async ({ request }) => {
+    const health = await request.get(`${API}/actuator/health`).catch(() => null);
+    expect(health?.ok(), `these tests need the backend at ${API}`).toBe(true);
+  });
+
+  /**
+   * 4.1 — the confirmation offers Google and Apple/Outlook, and neither needs an account, a
+   * permission or a backend call.
+   *
+   * <p>The negative half is the half that matters. Two controls that *look* like calendar buttons
+   * are easy; what section 3 requires is that both are inert client-side artefacts — a URL and a
+   * few lines of text — so the assertions are about where each control points and about the
+   * traffic the page does not generate. A hand-off that fetched the file from Bookly would pass a
+   * screenshot review and fail here.
+   *
+   * <p>The contents are checked against the booking that was actually made, so this is also 4.2
+   * end to end: `ics-file.spec.ts` proves the builder is right about an event handed to it, and
+   * this proves the page hands it the right event.
+   */
+  test("aConfirmedBookingCanBeAddedToACalendar", async ({ page, request }) => {
+    test.setTimeout(120_000);
+    const owner = await newOwner(request);
+    const seeded = await seedBookable(request, owner, { durationMinutes: 30 });
+
+    await openBookingPage(page, seeded, DATE);
+    const availability = await publicAvailability(request, seeded.slug, seeded.serviceId, DATE);
+    expect(availability.slots.length, "the seeded day offers times").toBeGreaterThan(0);
+    const chosen = availability.slots[0].start;
+    const chosenEnd = availability.slots[0].end;
+    await page.getByRole("button", { name: localTimeIn(chosen, availability.timezone), exact: true }).click();
+
+    await page.getByLabel(/name/i).fill("Calendar Keeper");
+    await page.getByLabel(/email/i).fill(`calendar-${Date.now()}@example.test`);
+    await page.getByLabel(/phone/i).fill("+64211234567");
+    await page.locator("button[type=submit]").click();
+    await expect(page.getByText(CONFIRMED_TEXT).first(), "the booking is confirmed on screen")
+      .toBeVisible({ timeout: SETTLE });
+
+    // From here on, anything the page asks the server for is a backend call the criterion forbids.
+    const backendCalls: string[] = [];
+    page.on("request", (req) => {
+      if (req.url().startsWith(API)) backendCalls.push(`${req.method()} ${req.url()}`);
+    });
+
+    // --- the two controls exist and are offered to the customer.
+    const google = page.locator("a[href]").filter({ hasText: /google/i }).first();
+    const appleOutlook = page
+      .locator("a[href]")
+      .filter({ hasText: /apple|outlook|\.ics|ical|download/i })
+      .first();
+    await expect(
+      google,
+      "4.1: the confirmation offers Google Calendar — a customer who has to retype the time is a " +
+        "customer who may retype it wrong, or not at all",
+    ).toBeVisible({ timeout: SETTLE });
+    await expect(
+      appleOutlook,
+      "4.1: and Apple/Outlook, which is the .ics file — offering only Google excludes everyone who " +
+        "does not use it",
+    ).toBeVisible({ timeout: SETTLE });
+
+    const googleHref = (await google.getAttribute("href")) ?? "";
+    const icsHref = (await appleOutlook.getAttribute("href")) ?? "";
+
+    // --- neither needs an account, a permission or a backend call.
+    expect(googleHref, "the Google hand-off is a plain link to Google Calendar").toMatch(
+      /^https:\/\/([a-z]+\.)*google\.com\//,
+    );
+    expect(
+      googleHref,
+      "and not an OAuth flow: an account, a consent screen and a stored token are exactly what " +
+        "section 3 says this feature must not need",
+    ).not.toMatch(/accounts\.google\.com|oauth|client_id|scope=/i);
+    expect(
+      icsHref,
+      "the .ics travels in the page itself, as a data: URL. An https link back to Bookly would be " +
+        "a backend call, and a route to build and serve a file the browser already has",
+    ).toMatch(/^(data:text\/calendar[;,]|blob:)/);
+    expect(
+      icsHref.startsWith(API),
+      "and in particular it must not point at the API",
+    ).toBe(false);
+
+    // Give the page a moment to make any request it was going to make.
+    await page.waitForTimeout(2_000);
+    expect(
+      backendCalls,
+      "4.1: neither hand-off may need a backend call — an .ics is a few lines of text and a Google " +
+        "link is a URL, and a confirmation that phones home to produce them fails for every " +
+        "customer whose booking succeeded but whose network then did not",
+    ).toEqual([]);
+
+    // --- and what they hand off is this booking, not a plausible-looking other one.
+    expect(icsHref.startsWith("data:"), "the file must be readable from the page for this check").toBe(true);
+    const ics = decodeDataUrl(icsHref);
+    expect(ics, "the file is an iCalendar object").toContain("BEGIN:VEVENT");
+    expect(ics, "4.2: naming the service that was booked").toContain(seeded.serviceName);
+    expect(ics, "the business it was booked with").toContain(seeded.businessName);
+    expect(ics, "and the person who will do it").toContain(seeded.employeeName);
+    expect(
+      ics,
+      `4.2: at the instant the API recorded, in UTC (${utcStamp(chosen)}) — this browser is in ` +
+        "America/Los_Angeles and the business is in " +
+        `${seeded.timezone}, so a file built from the viewer's clock says something else`,
+    ).toContain(utcStamp(chosen));
+    expect(ics, "and ending when the service ends").toContain(utcStamp(chosenEnd));
+
+    const stamps = googleHref.match(/\d{8}T\d{6}Z/g) ?? [];
+    expect(
+      stamps,
+      "4.3 on a real booking: the Google link and the file must agree about when the appointment is",
+    ).toEqual([utcStamp(chosen), utcStamp(chosenEnd)]);
+  });
+
+  /**
+   * 4.12 — a business with no logo shows the Bookly mark rather than a gap.
+   *
+   * <p>A gap is not neutral. A booking page that renders a blank rectangle where the identity
+   * belongs reads as a page that failed to load, and section 1's reason for this feature is that a
+   * customer is being asked to trust an address.
+   */
+  test("aBusinessWithoutALogoShowsTheBooklyMark", async ({ page, request }) => {
+    const owner = await newOwner(request);
+    const seeded = await seedBookable(request, owner, { durationMinutes: 30 });
+
+    // The premise, asserted rather than assumed: this business really has no logo.
+    const publicView = await request.get(`${API}/api/public/businesses/${seeded.slug}`);
+    expect(publicView.status(), "the public view of the seeded business").toBe(200);
+    const logoUrl = (await publicView.json()).logoUrl;
+    expect(logoUrl ?? null, "a freshly seeded business has no logo").toBeNull();
+
+    await page.goto(`/book/${seeded.slug}`);
+    await expect(page.getByText(new RegExp(seeded.businessName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))))
+      .toBeVisible({ timeout: SETTLE });
+
+    await expect(
+      booklyMark(page),
+      "4.12: with no logo of its own the page must show the Bookly mark — a named, visible mark, " +
+        "not an empty space the reader has to interpret as deliberate",
+    ).toBeVisible({ timeout: SETTLE });
+    expect(
+      await brokenImages(page),
+      "and it must not be an <img> with nothing behind it, which is the gap wearing a border",
+    ).toEqual([]);
+  });
+
+  /**
+   * 4.14 — a logo that fails to load falls back to the Bookly mark rather than a broken image.
+   *
+   * <p>The URL is well-formed https on a host that cannot resolve, which is the case that actually
+   * happens: section 3 accepts that the image depends on someone else's hosting, and someone
+   * else's hosting goes away. A malformed URL would be refused by the API under 4.13 and would
+   * never reach a browser, so it tests nothing about the fallback.
+   */
+  test("aBrokenLogoFallsBackRatherThanBreaking", async ({ page, request }) => {
+    const owner = await newOwner(request);
+    const seeded = await seedBookable(request, owner, { durationMinutes: 30 });
+
+    // The premise, established rather than assumed: this page really does render an owner's logo.
+    // Without it a page that ignored logoUrl altogether would satisfy every assertion below, and
+    // the criterion would be decided by a feature that was never built.
+    //
+    // The image is answered by the browser rather than fetched, because a test that depended on
+    // somebody's CDN being up would fail for reasons that have nothing to do with Bookly. The
+    // interception supplies an image that exists; it does not stand in for any behaviour under
+    // test, which is entirely what the page does with the URL it was given.
+    const working = "https://cdn.logo-fixture.example/brand.png";
+    await page.route(working, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "image/png",
+        body: Buffer.from(ONE_PIXEL_PNG, "base64"),
+      }),
+    );
+    try {
+      await setLogo(request, owner, seeded.businessId, working);
+      await page.goto(`/book/${seeded.slug}`);
+      await expect
+        .poll(() => page.evaluate(() =>
+          [...document.querySelectorAll("img")].some(
+            (img) =>
+              decodeURIComponent(img.currentSrc || img.src).includes("brand.png") &&
+              img.complete &&
+              img.naturalWidth > 0,
+          ),
+        ), {
+          message:
+            "a logo the owner set, on a host that answers, must actually appear on the booking " +
+            "page — otherwise there is nothing for the next half of this test to break",
+          timeout: SETTLE,
+        })
+        .toBe(true);
+    } finally {
+      await page.unrouteAll({ behavior: "ignoreErrors" });
+    }
+
+    // .invalid is reserved by RFC 2606 precisely so that it can never resolve.
+    const dead = `https://logo-host-${Date.now()}.invalid/brand.png`;
+    const stored = await setLogo(request, owner, seeded.businessId, dead);
+    expect(
+      stored.logoUrl,
+      "an absolute https URL is accepted and stored, so what the page receives is a logo it has " +
+        "every reason to believe in — it just happens to be on a host that has gone away",
+    ).toBe(dead);
+
+    await page.goto(`/book/${seeded.slug}`);
+    await expect(page.getByText(new RegExp(seeded.businessName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))))
+      .toBeVisible({ timeout: SETTLE });
+
+    await expect(
+      booklyMark(page),
+      "4.14: when the logo cannot be fetched the page must fall back to the Bookly mark. The " +
+        "customer is being asked to trust this address, and a broken-image icon is the single " +
+        "strongest signal that they should not",
+    ).toBeVisible({ timeout: 30_000 });
+    await expect
+      .poll(() => brokenImages(page), {
+        message:
+          "no broken <img> may remain on the page: the browser's own placeholder is exactly the " +
+          "thing this criterion forbids, and leaving it beside the fallback shows both",
+        timeout: 30_000,
+      })
+      .toEqual([]);
+    await expect
+      .poll(() => page.evaluate((url) =>
+        [...document.querySelectorAll("img")].filter(
+          (img) =>
+            (img.currentSrc || img.src).includes(url) &&
+            img.getBoundingClientRect().width > 0 &&
+            img.getBoundingClientRect().height > 0,
+        ).length,
+        new URL(dead).host,
+      ), {
+        message:
+          "and the image that could not load must be out of the layout, not merely invisible " +
+          "beside the mark: two logos where there should be one is the gap with extra steps",
+        timeout: 30_000,
+      })
+      .toBe(0);
+  });
+});

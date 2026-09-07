@@ -73,7 +73,7 @@ public class PublicBookingService {
                 .toList();
 
         return new PublicBusiness(business.getSlug(), business.getName(), business.getTimezone(),
-                offered, people);
+                business.getLogoUrl(), offered, people);
     }
 
     @Transactional(readOnly = true)

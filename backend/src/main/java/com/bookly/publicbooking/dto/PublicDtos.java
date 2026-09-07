@@ -34,7 +34,7 @@ public final class PublicDtos {
     public record PublicEmployee(UUID id, String name, List<UUID> serviceIds) {
     }
 
-    public record PublicBusiness(String slug, String name, String timezone,
+    public record PublicBusiness(String slug, String name, String timezone, String logoUrl,
                                  List<PublicService> services, List<PublicEmployee> employees) {
     }
 
