@@ -8,18 +8,14 @@ import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { api, type Appointment } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import {
+  addDays,
+  dateOfInstantIn,
+  formatPlainDate,
+  startOfWeek,
+  todayIn,
+} from "@/lib/calendar-dates";
 import { useBusiness } from "@/lib/use-business";
-
-/** Monday of the week containing the given date. */
-function startOfWeek(date: Date) {
-  const copy = new Date(date);
-  const weekday = (copy.getDay() + 6) % 7;
-  copy.setDate(copy.getDate() - weekday);
-  copy.setHours(0, 0, 0, 0);
-  return copy;
-}
-
-const isoDate = (date: Date) => date.toISOString().slice(0, 10);
 
 /**
  * A week at a glance.
@@ -33,15 +29,17 @@ export default function CalendarPage({ params }: { params: Promise<{ businessId:
   const { tokens } = useAuth();
   const token = tokens?.accessToken ?? "";
   const business = useBusiness(businessId);
-  const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()));
+  const zone = business.data?.timezone;
 
-  const days = Array.from({ length: 7 }, (_, index) => {
-    const day = new Date(weekStart);
-    day.setDate(day.getDate() + index);
-    return day;
-  });
-  const from = isoDate(days[0]);
-  const to = isoDate(days[6]);
+  // An offset rather than a stored date. The week shown is always anchored to the business's own
+  // today, so it cannot be seeded from the viewer's clock before the business has loaded and then
+  // left one day out for the rest of the session.
+  const [weekOffset, setWeekOffset] = useState(0);
+
+  const weekStart = addDays(startOfWeek(todayIn(zone)), weekOffset * 7);
+  const days = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
+  const from = days[0];
+  const to = days[6];
 
   const appointments = useQuery({
     queryKey: ["calendar", businessId, from, to],
@@ -49,13 +47,8 @@ export default function CalendarPage({ params }: { params: Promise<{ businessId:
     enabled: Boolean(token),
   });
 
-  const zone = business.data?.timezone;
-
   /** The calendar day an instant falls on, in the business's zone. */
-  const dayKey = (instant: string) =>
-    zone
-      ? new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(new Date(instant))
-      : instant.slice(0, 10);
+  const dayKey = (instant: string) => dateOfInstantIn(instant, zone);
 
   const timeOf = (instant: string) =>
     zone
@@ -63,14 +56,10 @@ export default function CalendarPage({ params }: { params: Promise<{ businessId:
           .format(new Date(instant))
       : instant.slice(11, 16);
 
-  const shift = (weeks: number) => {
-    const next = new Date(weekStart);
-    next.setDate(next.getDate() + weeks * 7);
-    setWeekStart(next);
-  };
+  const shift = (weeks: number) => setWeekOffset((current) => current + weeks);
 
-  const today = isoDate(new Date());
-  const weekLabel = `${new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long" }).format(days[0])} – ${new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", year: "numeric" }).format(days[6])}`;
+  const today = todayIn(zone);
+  const weekLabel = `${formatPlainDate(days[0], { day: "numeric", month: "long" })} – ${formatPlainDate(days[6], { day: "numeric", month: "long", year: "numeric" })}`;
 
   return (
     <div className="flex flex-col gap-6">
@@ -86,7 +75,7 @@ export default function CalendarPage({ params }: { params: Promise<{ businessId:
               variant="ghost"
               size="sm"
               type="button"
-              onClick={() => setWeekStart(startOfWeek(new Date()))}
+              onClick={() => setWeekOffset(0)}
             >
               This week
             </Button>
@@ -134,15 +123,17 @@ export default function CalendarPage({ params }: { params: Promise<{ businessId:
                 data-testid="calendar-week"
               >
                 {days.map((day) => {
-                  const key = isoDate(day);
+                  // One value is both the column's identity and what its heading says, so a label
+                  // and the appointments under it can no longer disagree about which day it is.
+                  const key = day;
                   return (
                     <WeekDay
                       key={key}
-                      label={new Intl.DateTimeFormat("en-GB", {
+                      label={formatPlainDate(day, {
                         weekday: "short",
                         day: "numeric",
                         month: "short",
-                      }).format(day)}
+                      })}
                       isToday={key === today}
                       appointments={(byDay.get(key) ?? []).sort((a, b) =>
                         a.startsAt.localeCompare(b.startsAt),

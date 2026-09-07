@@ -13,6 +13,7 @@ import { Card } from "@/components/ui/Card";
 import { Input, Select } from "@/components/ui/Input";
 import { SkeletonRows } from "@/components/ui/Skeleton";
 import { ApiError, api, type BookingConfirmation as Confirmation } from "@/lib/api";
+import { todayIn } from "@/lib/calendar-dates";
 
 /**
  * The public booking page: no account, no token.
@@ -29,7 +30,10 @@ export default function BookingPage({ params }: { params: Promise<{ slug: string
 
   const [serviceId, setServiceId] = useState("");
   const [employeeId, setEmployeeId] = useState("");
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  // Empty until the business's zone is known, then defaulted to today *there*. Seeding it from
+  // toISOString() offered a visitor east of UTC tomorrow's slots under the heading "today" every
+  // evening, which is the same defect the calendar had.
+  const [date, setDate] = useState("");
   const [chosenSlot, setChosenSlot] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState<Confirmation | null>(null);
@@ -44,6 +48,10 @@ export default function BookingPage({ params }: { params: Promise<{ slug: string
     business.data?.services.find((s) => s.id === serviceId) ?? business.data?.services[0];
   const activeServiceId = service?.id ?? "";
 
+  // Same idiom as activeServiceId: the state holds only what the visitor has chosen, and the
+  // default comes from the business once it is known.
+  const activeDate = date || (business.data ? todayIn(business.data.timezone) : "");
+
   // Only people who perform the chosen service. Offering the rest would let a visitor pick a
   // combination that can never produce a time.
   const eligible = (business.data?.employees ?? []).filter((employee) =>
@@ -51,14 +59,14 @@ export default function BookingPage({ params }: { params: Promise<{ slug: string
   );
 
   const availability = useQuery({
-    queryKey: ["public-availability", slug, activeServiceId, employeeId, date],
+    queryKey: ["public-availability", slug, activeServiceId, employeeId, activeDate],
     queryFn: () =>
       api.publicAvailability(slug, {
         serviceId: activeServiceId,
         employeeId: employeeId || undefined,
-        date,
+        date: activeDate,
       }),
-    enabled: Boolean(activeServiceId && date && business.data),
+    enabled: Boolean(activeServiceId && activeDate && business.data),
   });
 
   const book = useMutation({
@@ -212,7 +220,7 @@ export default function BookingPage({ params }: { params: Promise<{ slug: string
             <span className="mb-1.5 block font-medium text-ink">Date</span>
             <Input
               type="date"
-              value={date}
+              value={activeDate}
               onChange={(event) => {
                 setDate(event.target.value);
                 setChosenSlot(null);

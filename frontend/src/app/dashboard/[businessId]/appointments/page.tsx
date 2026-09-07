@@ -11,13 +11,8 @@ import { Input } from "@/components/ui/Input";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { ApiError, api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { addDays, todayIn } from "@/lib/calendar-dates";
 import { useBusiness } from "@/lib/use-business";
-
-function isoDate(offsetDays: number) {
-  const date = new Date();
-  date.setDate(date.getDate() + offsetDays);
-  return date.toISOString().slice(0, 10);
-}
 
 export default function AppointmentsPage({
   params,
@@ -29,14 +24,20 @@ export default function AppointmentsPage({
   const token = tokens?.accessToken ?? "";
   const queryClient = useQueryClient();
   const business = useBusiness(businessId);
-  const [from, setFrom] = useState(() => isoDate(-7));
-  const [to, setTo] = useState(() => isoDate(30));
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const [failure, setFailure] = useState<string | null>(null);
 
+  // The default range is the business's own week either side of its own today, not the viewer's
+  // and not UTC's. State holds only what the owner has actually picked.
+  const zone = business.data?.timezone;
+  const activeFrom = from || (business.data ? addDays(todayIn(zone), -7) : "");
+  const activeTo = to || (business.data ? addDays(todayIn(zone), 30) : "");
+
   const appointments = useQuery({
-    queryKey: ["appointments", businessId, from, to],
-    queryFn: () => api.listAppointments(token, businessId, from, to),
-    enabled: Boolean(token && from && to),
+    queryKey: ["appointments", businessId, activeFrom, activeTo],
+    queryFn: () => api.listAppointments(token, businessId, activeFrom, activeTo),
+    enabled: Boolean(token && activeFrom && activeTo),
   });
 
   const cancel = useMutation({
@@ -51,7 +52,6 @@ export default function AppointmentsPage({
       setFailure(error instanceof ApiError ? error.body.message : "Could not reach the server."),
   });
 
-  const zone = business.data?.timezone;
   const format = (value: string) =>
     new Intl.DateTimeFormat("en-GB", {
       dateStyle: "medium",
@@ -72,7 +72,7 @@ export default function AppointmentsPage({
           <Input
             className="w-44"
             type="date"
-            value={from}
+            value={activeFrom}
             onChange={(event) => setFrom(event.target.value)}
           />
         </label>
@@ -81,7 +81,7 @@ export default function AppointmentsPage({
           <Input
             className="w-44"
             type="date"
-            value={to}
+            value={activeTo}
             onChange={(event) => setTo(event.target.value)}
           />
         </label>
