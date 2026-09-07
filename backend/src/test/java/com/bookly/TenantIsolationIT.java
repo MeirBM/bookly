@@ -328,4 +328,88 @@ class TenantIsolationIT extends ApiIntegrationTest {
                 theirService);
         assertThat(stillLinked).as("their employee-service link was not rewritten from outside").isEqualTo(1);
     }
+
+    /**
+     * 4.15 — setting a logo is tenant-scoped like every other write.
+     *
+     * <p>The route table in 1.10 already generates a case for {@code PUT
+     * /api/businesses/{businessId}/logo} the moment the route is registered, and that case decides
+     * the status code. This one decides the thing a status code cannot: that the refusal was a
+     * refusal all the way down. A guard that answers 403 after the row has been written is a guard
+     * that failed, and the victim would find out by looking at their own public booking page.
+     *
+     * <p>Both directions of the turn-1 rule are asserted here — the outsider with no membership at
+     * all, and a caller who is a legitimate member of some other business, since "authenticated" is
+     * not "entitled to this business".
+     */
+    @Test
+    @DisplayName("4.15 setting a logo is tenant-scoped like every other write")
+    void settingALogoIsTenantScoped() {
+        Account victim = newAccount("logo-victim");
+        JsonNode victimBusiness = newBusiness(victim, "Logo Victim Salon");
+        String victimId = victimBusiness.path("id").asText();
+        String victimSlug = victimBusiness.path("slug").asText();
+
+        String ownLogo = "https://cdn.example.test/victim.png";
+        ResponseEntity<String> ownWrite = send(
+                HttpMethod.PUT,
+                "/api/businesses/" + victimId + "/logo",
+                body("logoUrl", ownLogo),
+                victim.accessToken());
+        assertThat(ownWrite.getStatusCode().value())
+                .as("the owner setting their own logo — the control the rest of this test needs")
+                .isEqualTo(200);
+
+        Account memberElsewhere = newAccount("logo-outsider");
+        newBusiness(memberElsewhere, "Logo Outsider Studio");
+        Account noBusinessAtAll = newAccount("logo-nobody");
+
+        record Caller(String what, String token) {}
+        List<Caller> callers = List.of(
+                new Caller("a member of another business", memberElsewhere.accessToken()),
+                new Caller("an authenticated user who belongs to no business", noBusinessAtAll.accessToken()));
+
+        String hostile = "https://attacker.example.test/not-yours.png";
+        SoftAssertions soft = new SoftAssertions();
+        for (Caller caller : callers) {
+            ResponseEntity<String> response = send(
+                    HttpMethod.PUT,
+                    "/api/businesses/" + victimId + "/logo",
+                    body("logoUrl", hostile),
+                    caller.token());
+
+            soft.assertThat(response.getStatusCode().value())
+                    .as("PUT /logo on a business the caller does not belong to (%s)", caller.what())
+                    .isEqualTo(403);
+            soft.assertThat(String.valueOf(response.getBody()))
+                    .as("%s: the refusal must not leak the business it refused", caller.what())
+                    .doesNotContain("Logo Victim Salon", victimSlug, ownLogo);
+        }
+        soft.assertAll();
+
+        String stored = jdbc().queryForObject(
+                "select logo_url from businesses where id = ?::uuid", String.class, victimId);
+        assertThat(stored)
+                .as("the victim's logo after every attempt: a 403 that still wrote the row is not a refusal")
+                .isEqualTo(ownLogo);
+
+        // And a business the caller does not belong to is indistinguishable from one that is not
+        // there at all, per 1.12 — the logo route must not become the oracle the others are not.
+        ResponseEntity<String> forbidden = send(
+                HttpMethod.PUT,
+                "/api/businesses/" + victimId + "/logo",
+                body("logoUrl", hostile),
+                memberElsewhere.accessToken());
+        ResponseEntity<String> absent = send(
+                HttpMethod.PUT,
+                "/api/businesses/" + UUID.randomUUID() + "/logo",
+                body("logoUrl", hostile),
+                memberElsewhere.accessToken());
+        assertThat(absent.getStatusCode())
+                .as("an absent business must answer the logo write exactly as a forbidden one")
+                .isEqualTo(forbidden.getStatusCode());
+        assertThat(absent.getBody())
+                .as("and with the same body")
+                .isEqualTo(forbidden.getBody());
+    }
 }
