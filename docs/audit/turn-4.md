@@ -179,6 +179,16 @@ trade reads as an oversight.
 | **CI green** | Pending — recorded on the PR, not claimed here. |
 | **Risks stated** | Yes, §4. Five, none silent. |
 
+**A turn-3 test raced in CI and was made to wait, not made to pass.**
+`theOwnerSeesAndCancelsABooking` failed on the first CI run. It was not a turn-4 test and turn 4
+did not touch it. Its final step read `body.innerText()` once, the instant the *API* reported
+`CANCELLED` — allowing the browser's own invalidated refetch, a second round trip, no time at all.
+It passed locally in about a second and failed on a loaded runner, which is the signature of a test
+measuring the runner rather than the behaviour. The condition was left exactly as written and must
+still become true within the same `SETTLE` budget; only the single read became a wait. The change
+is called out here because "CI was red and then it was green" is the sentence behind which a
+weakened assertion normally hides.
+
 **A process failure worth recording.** Two `git add -A` calls made while a test-writing agent was
 still working swept 992 lines of its in-progress browser tests into commits whose messages described
 security fixes and a migration. The atomic-commit rule in `CLAUDE.md` is there so a reader six months

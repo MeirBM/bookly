@@ -630,8 +630,20 @@ test.describe("dashboard screens", () => {
       )
       .toBe("CANCELLED");
 
+    // Polled, not snapshotted. The assertion above proves the *API* has cancelled it; the screen
+    // catching up is a second round trip that the invalidated query still has to make, and reading
+    // innerText once the instant the API answers allows it no time at all. That raced on a loaded
+    // CI runner while passing locally in about a second, which is the signature of a test that
+    // measures the runner rather than the behaviour. The condition is unchanged and still has to
+    // become true within SETTLE — only the single read became a wait.
+    await expect
+      .poll(async () => page.locator("body").innerText(), {
+        message: "the screen must not still present it as a live booking",
+        timeout: SETTLE,
+      })
+      .not.toMatch(/confirmed|pending/i);
+
     const after = await page.locator("body").innerText();
-    expect(after, "the screen must not still present it as a live booking").not.toMatch(/confirmed|pending/i);
     expect(after, "and the page must visibly change, not silently succeed").not.toEqual(before);
   });
 
