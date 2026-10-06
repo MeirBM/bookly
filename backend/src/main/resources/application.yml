@@ -27,8 +27,8 @@ spring:
 
   data:
     redis:
-      # REDIS_URL (redis:// or rediss://) wins over host and port when set; empty means unset.
-      url: ${REDIS_URL:}
+      # REDIS_URL (redis:// or rediss://) wins over host and port when set - applied by
+      # RedisUrlEnvironmentPostProcessor, because an empty default here is an invalid url.
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
 
