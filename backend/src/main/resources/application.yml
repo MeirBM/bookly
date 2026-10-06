@@ -3,12 +3,14 @@ spring:
     name: bookly-backend
 
   datasource:
+    # DATABASE_URL is either a JDBC url (with DATABASE_USER / DATABASE_PASSWORD) or a provider-style
+    # postgres://user:password@host/db url, which DatabaseUrlEnvironmentPostProcessor converts.  # allow-secret
     # No defaults, for the same reason bookly.jwt.secret has none: a deployment that forgets
     # DATABASE_PASSWORD should fail loudly at startup, not quietly connect to whatever database
     # answers on localhost with the development credentials and then serve traffic from it.
     url: ${DATABASE_URL}
-    username: ${DATABASE_USER}
-    password: ${DATABASE_PASSWORD}
+    username: ${DATABASE_USER:}
+    password: ${DATABASE_PASSWORD:}
 
   jpa:
     open-in-view: false            # an entity must not be lazily loaded from a view layer
@@ -25,6 +27,8 @@ spring:
 
   data:
     redis:
+      # REDIS_URL (redis:// or rediss://) wins over host and port when set - applied by
+      # RedisUrlEnvironmentPostProcessor, because an empty default here is an invalid url.
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
 

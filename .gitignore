@@ -28,3 +28,7 @@ next-env.d.ts
 # Local data
 postgres-data/
 redis-data/
+
+# Database dumps hold real data
+backup.dump
+*.dump
