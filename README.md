@@ -120,10 +120,21 @@ drifts.
 | 1 | Foundation, authentication, tenant isolation | complete — [audit](docs/audit/turn-1.md) |
 | 2 | Services, employees, working hours, availability engine | complete — [audit](docs/audit/turn-2.md) |
 | 3 | Booking, concurrency, public booking page, deployment | complete — [audit](docs/audit/turn-3.md) · 32/32 |
+| 4 | Design-standard rebuild, calendar hand-off, booking alerts, business logo | complete — [audit](docs/audit/turn-4.md) · 15/15 |
 
 **Live at https://bookly-pearl.vercel.app** — open `/book/{slug}` for a business and book a time,
-no account needed. The API, PostgreSQL and Redis run at
-https://bookly-production-a85b.up.railway.app.
+no account needed. The frontend runs on Vercel; the API runs on Render at
+https://bookly-backend-terp.onrender.com, with PostgreSQL on Neon and Redis on Render Key Value.
+The deployment is described by [`render.yaml`](render.yaml). It moved from Railway to Render when
+Railway's trial ended; `scripts/migrate-db.sh` copied the data across.
+
+The backend is on Render's free plan, so it sleeps after about 15 minutes without traffic and the
+first request afterwards takes a minute or two while it starts. Redis is used only for rate
+limiting, so its non-persistent free tier loses nothing that matters.
+
+Configuration is by environment variable (see [`.env.example`](.env.example)): `DATABASE_URL` is
+either a JDBC URL or a provider-style `postgres://` URL, `REDIS_URL` is optional and falls back to
+`REDIS_HOST`/`REDIS_PORT`, and `CORS_ALLOWED_ORIGINS` must be the exact frontend origin.
 
 To try the whole loop: register, create a business, add a service and an employee, link them and
 give the employee working hours. Then open `/book/{slug}` in a private window, book a time, and
@@ -132,8 +143,8 @@ public page.
 
 The deployment runbook is [`docs/deploy.md`](docs/deploy.md). It is worth reading before repeating
 this: five attempts failed first, each for a different reason, and every one of them was a
-configuration value wrong in a way no error message mentioned.
-
-Public booking page for a business is at `/book/{slug}`; the API is the same host.
-The deployment runbook, including three failures worth reading before repeating them,
-is [`docs/deploy.md`](docs/deploy.md).
+configuration value wrong in a way no error message mentioned. A sixth failure mode is recorded
+there too, from turn 4, when the backend still ran on Railway: Vercel and Railway don't agree about
+when a merge means "deploy", so a merge going green is not evidence that both halves of the app
+are running it — only a request that exercises something turn-4-specific (`docs/deploy.md` gives
+the one-line check) is.
